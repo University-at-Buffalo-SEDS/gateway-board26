@@ -26,7 +26,7 @@
 #include "main.h"
 #include "sedsprintf.h"
 #include "telemetry.h"
-#include "PB-Threads.h"
+#include "GB-Threads.h"
 #include "tx_api.h"
 /* USER CODE END Includes */
 
