@@ -73,6 +73,13 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
 
 # Telemetry Library
 set(SEDSPRINTF_RS_DEVICE_IDENTIFIER "GB" CACHE STRING "" FORCE)
+set(SEDSPRINTF_RS_MAX_STACK_PAYLOAD "128" CACHE STRING "" FORCE)
+set(SEDSPRINTF_RS_ENV_MAX_QUEUE_SIZE "4096" CACHE STRING "" FORCE)
+set(SEDSPRINTF_RS_ENV_STARTING_QUEUE_SIZE "512" CACHE STRING "" FORCE)
+set(SEDSPRINTF_RS_ENV_QUEUE_GROW_STEP "1.25" CACHE STRING "" FORCE)
+set(SEDSPRINTF_RS_ENV_MAX_RECENT_RX_IDS "32" CACHE STRING "" FORCE)
+set(SEDSPRINTF_RS_ENV_STARTING_RECENT_RX_IDS "16" CACHE STRING "" FORCE)
+set(SEDSPRINTF_RS_ENV_PAYLOAD_COMPRESS_THRESHOLD "30" CACHE STRING "" FORCE)
 # set(SEDSPRINTF_RS_TARGET "thumbv8m.main-none-eabihf" CACHE STRING "" FORCE) # Set target for embedded systems
 set(SEDSPRINTF_RS_TARGET "thumbv7em-none-eabihf" CACHE STRING "" FORCE) # Set target for embedded systems
 
@@ -82,7 +89,7 @@ target_link_libraries(${CMAKE_PROJECT_NAME} sedsprintf_rs)
 
 
 # Option defaults to ON
-option(ENABLE_TELEMETRY "Enable the telemetry subsystem" ON)
+option(ENABLE_TELEMETRY "Enable the telemetry subsystem" OFF)
 
 # Print its state for debugging
 message(STATUS "Telemetry enabled: ${ENABLE_TELEMETRY}")

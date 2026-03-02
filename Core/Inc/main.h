@@ -57,9 +57,11 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
+#define GREEN_LED_Pin GPIO_PIN_11
+#define GREEN_LED_GPIO_Port GPIOB
 
 /* USER CODE BEGIN Private defines */
-
+void cdc_printf_init(void);
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus

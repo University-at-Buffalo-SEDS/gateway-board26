@@ -22,7 +22,11 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "ux_api.h"
+#include "ux_device_class_cdc_acm.h"
+#include <stdint.h>
+#include <stdio.h>
+extern UX_SLAVE_CLASS_CDC_ACM *cdc_acm;
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -373,6 +377,7 @@ static void MX_DMA_Init(void)
   */
 static void MX_GPIO_Init(void)
 {
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
   /* USER CODE BEGIN MX_GPIO_Init_1 */
 
   /* USER CODE END MX_GPIO_Init_1 */
@@ -383,12 +388,184 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
 
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GREEN_LED_GPIO_Port, GREEN_LED_Pin, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin : GREEN_LED_Pin */
+  GPIO_InitStruct.Pin = GREEN_LED_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GREEN_LED_GPIO_Port, &GPIO_InitStruct);
+
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
   /* USER CODE END MX_GPIO_Init_2 */
 }
 
 /* USER CODE BEGIN 4 */
+
+static inline int cdc_in_isr(void)
+{
+  return (__get_IPSR() != 0U);
+}
+
+/* ------------ Mutex for multi-thread serialization ------------ */
+
+static TX_MUTEX cdc_mutex;
+
+/*
+ * NOTE:
+ * Call this from a ThreadX thread AFTER USBX device init (MX_USBX_Device_Init)
+ * has run. It's OK to call multiple times if you guard creation elsewhere,
+ * but simplest is call once from your "app" thread entry.
+ */
+void cdc_printf_init(void)
+{
+  (void)tx_mutex_create(&cdc_mutex, "cdc_tx_mutex", TX_INHERIT);
+}
+
+extern volatile ULONG _tx_thread_system_state;
+
+static inline int tx_is_running(void)
+{
+  return (__get_IPSR() == 0U) && (_tx_thread_system_state == 0U);
+}
+
+static void cdc_lock(void)
+{
+  if (!tx_is_running() || cdc_in_isr()) return;
+  (void)tx_mutex_get(&cdc_mutex, TX_WAIT_FOREVER);
+}
+
+static void cdc_unlock(void)
+{
+  if (!tx_is_running() || cdc_in_isr()) return;
+  (void)tx_mutex_put(&cdc_mutex);
+}
+
+/* ------------ USB ready helper ------------ */
+
+static inline UINT usb_cdc_ready(void)
+{
+  return (cdc_acm != UX_NULL);
+}
+
+/* ------------ Bounded, drop-on-trouble CDC write ------------ */
+
+static void cdc_write_raw(const uint8_t *buf, uint16_t len)
+{
+  if (!buf || !len || cdc_in_isr()) return;
+  if (!usb_cdc_ready()) return;
+
+  cdc_lock();
+
+  /* Keep it simple: one synchronous write. If host isn't ready, drop. */
+  ULONG actual = 0;
+  UINT st = ux_device_class_cdc_acm_write(cdc_acm, (UCHAR *)buf, (ULONG)len, &actual);
+  if (st != UX_SUCCESS || actual == 0)
+  {
+    /* Host not ready or write failed — drop the data instead of hard-failing.
+       This avoids entering Error_Handler when USB is connected but the
+       host-side serial port isn't opened. */
+    cdc_unlock();
+    return;
+  }
+  (void)actual;
+
+  cdc_unlock();
+}
+
+/* ---------- printf redirection ---------- */
+
+#ifdef __GNUC__
+int _write(int file, char *ptr, int len)
+{
+  (void)file;
+  if (len <= 0) return 0;
+
+  /* If USB not configured, pretend we consumed everything (best-effort debug) */
+  if (!usb_cdc_ready()) return len;
+
+  uint8_t buf[128];
+  int i = 0;
+  static uint8_t last_was_cr = 0;
+
+  while (i < len)
+  {
+    uint16_t w = 0;
+
+    while (i < len && w < sizeof(buf))
+    {
+      uint8_t c = (uint8_t)ptr[i++];
+
+      if (c == '\n')
+      {
+        if (!last_was_cr)
+        {
+          if (w > (uint16_t)(sizeof(buf) - 2))
+          {
+            i--;
+            break;
+          }
+          buf[w++] = '\r';
+        }
+
+        if (w >= sizeof(buf))
+        {
+          i--;
+          break;
+        }
+        buf[w++] = '\n';
+        last_was_cr = 0;
+      }
+      else
+      {
+        if (w >= sizeof(buf))
+        {
+          i--;
+          break;
+        }
+        buf[w++] = c;
+        last_was_cr = (c == '\r');
+      }
+    }
+
+    if (w > 0)
+    {
+      cdc_write_raw(buf, w);
+    }
+  }
+
+  return len;
+}
+#else
+int fputc(int ch, FILE *f)
+{
+  (void)f;
+
+  static uint8_t last_was_cr = 0;
+  uint8_t buf[2];
+  uint16_t w = 0;
+
+  if (!usb_cdc_ready()) return ch;
+
+  if (ch == '\n')
+  {
+    if (!last_was_cr) buf[w++] = '\r';
+    buf[w++] = '\n';
+    last_was_cr = 0;
+  }
+  else
+  {
+    buf[w++] = (uint8_t)ch;
+    last_was_cr = (ch == '\r');
+  }
+
+  if (w > 0) cdc_write_raw(buf, w);
+  return ch;
+}
+#endif
 
 /* USER CODE END 4 */
 

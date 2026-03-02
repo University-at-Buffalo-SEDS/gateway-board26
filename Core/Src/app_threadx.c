@@ -1,21 +1,21 @@
 /* USER CODE BEGIN Header */
 /**
-  ******************************************************************************
-  * @file    app_threadx.c
-  * @author  MCD Application Team
-  * @brief   ThreadX applicative file
-  ******************************************************************************
-  * @attention
-  *
-  * Copyright (c) 2020-2021 STMicroelectronics.
-  * All rights reserved.
-  *
-  * This software is licensed under terms that can be found in the LICENSE file
-  * in the root directory of this software component.
-  * If no LICENSE file comes with this software, it is provided AS-IS.
-  *
-  ******************************************************************************
-  */
+ ******************************************************************************
+ * @file    app_threadx.c
+ * @author  MCD Application Team
+ * @brief   ThreadX applicative file
+ ******************************************************************************
+ * @attention
+ *
+ * Copyright (c) 2020-2021 STMicroelectronics.
+ * All rights reserved.
+ *
+ * This software is licensed under terms that can be found in the LICENSE file
+ * in the root directory of this software component.
+ * If no LICENSE file comes with this software, it is provided AS-IS.
+ *
+ ******************************************************************************
+ */
 /* USER CODE END Header */
 
 /* Includes ------------------------------------------------------------------*/
@@ -32,7 +32,8 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-
+extern void telemetry_set_byte_pool(TX_BYTE_POOL *pool);
+extern void telemetry_init_lock(void);
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -56,38 +57,39 @@
 /* USER CODE END PFP */
 
 /**
-  * @brief  Application ThreadX Initialization.
-  * @param memory_ptr: memory pointer
-  * @retval int
-  */
+ * @brief  Application ThreadX Initialization.
+ * @param memory_ptr: memory pointer
+ * @retval int
+ */
 UINT App_ThreadX_Init(VOID *memory_ptr)
 {
   UINT ret = TX_SUCCESS;
   /* USER CODE BEGIN App_ThreadX_MEM_POOL */
-  if (init_telemetry_router() != SEDS_OK) {
-    Error_Handler();
-  }
-  /* Log after router is initialized, before threads start */
-
-  char started_txt[] = "Starting Threadx Scheduler";
-  log_telemetry_synchronous(SEDS_DT_MESSAGE_DATA, started_txt,
-                                  sizeof(started_txt), 1);
+  TX_BYTE_POOL *byte_pool = (TX_BYTE_POOL *)memory_ptr;
 
   /* USER CODE END App_ThreadX_MEM_POOL */
 
   /* USER CODE BEGIN App_ThreadX_Init */
-  create_telemetry_thread();
+  telemetry_set_byte_pool(byte_pool);
+  /* Initialize telemetry lock used by Rust (telemetry_lock/telemetry_unlock). */
+  telemetry_init_lock();
+
+  ret = create_telemetry_thread(byte_pool);
+  if (ret != TX_SUCCESS)
+  {
+    Error_Handler();
+  }
 
   /* USER CODE END App_ThreadX_Init */
 
   return ret;
 }
 
-  /**
-  * @brief  Function that implements the kernel's initialization.
-  * @param  None
-  * @retval None
-  */
+/**
+ * @brief  Function that implements the kernel's initialization.
+ * @param  None
+ * @retval None
+ */
 void MX_ThreadX_Init(void)
 {
   /* USER CODE BEGIN  Before_Kernel_Start */

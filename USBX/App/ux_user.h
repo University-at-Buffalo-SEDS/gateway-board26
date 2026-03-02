@@ -88,7 +88,6 @@
 #define UX_USER_H
 
 /* USER CODE BEGIN 1 */
-./build.py build --release#pragma GCC diagnostic ignored "-Warray-bounds"
 #pragma GCC diagnostic ignored "-Warray-bounds"
 
 /* USER CODE END 1 */
@@ -179,7 +178,7 @@
    is 4096 bytes but can be reduced in memory constrained environments. For cd-rom support in the storage
    class, this value cannot be less than 2048.  */
 
-#define UX_SLAVE_REQUEST_DATA_MAX_LENGTH                    2048
+#define UX_SLAVE_REQUEST_DATA_MAX_LENGTH                    512
 
 /* Defined, this value includes code to handle storage Multi-Media Commands (MMC). E.g., DVD-ROM. */
 
@@ -346,7 +345,7 @@
 
 /* Defined, this macro disables CDC ACM non-blocking transmission support. */
 
-/* #define UX_DEVICE_CLASS_CDC_ACM_TRANSMISSION_DISABLE */
+#define UX_DEVICE_CLASS_CDC_ACM_TRANSMISSION_DISABLE
 
 /* defined, this macro enables device audio feedback endpoint support.  */
 
@@ -358,7 +357,7 @@
 
 /* Defined, class _write is pending ZLP automatically (complete transfer) after buffer is sent.  */
 
-/* #define UX_DEVICE_CLASS_CDC_ACM_WRITE_AUTO_ZLP  */
+#define UX_DEVICE_CLASS_CDC_ACM_WRITE_AUTO_ZLP
 
 /* #define UX_DEVICE_CLASS_PRINTER_WRITE_AUTO_ZLP  */
 
