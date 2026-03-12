@@ -47,16 +47,16 @@
 #if (USE_STATIC_ALLOCATION == 1)
 /* USER CODE BEGIN TX_Pool_Buffer */
 /* USER CODE END TX_Pool_Buffer */
-#if defined(__ICCARM__)
-#pragma data_alignment = 4
+#if defined ( __ICCARM__ )
+#pragma data_alignment=4
 #endif
 __ALIGN_BEGIN static UCHAR tx_byte_pool_buffer[TX_APP_MEM_POOL_SIZE] __ALIGN_END;
 static TX_BYTE_POOL tx_app_byte_pool;
 
 /* USER CODE BEGIN UX_Device_Pool_Buffer */
 /* USER CODE END UX_Device_Pool_Buffer */
-#if defined(__ICCARM__)
-#pragma data_alignment = 4
+#if defined ( __ICCARM__ )
+#pragma data_alignment=4
 #endif
 __ALIGN_BEGIN static UCHAR ux_device_byte_pool_buffer[UX_DEVICE_APP_MEM_POOL_SIZE] __ALIGN_END;
 static TX_BYTE_POOL ux_device_app_byte_pool;
@@ -73,10 +73,10 @@ static TX_BYTE_POOL ux_device_app_byte_pool;
 /* USER CODE END PFP */
 
 /**
- * @brief  Define the initial system.
- * @param  first_unused_memory : Pointer to the first unused memory
- * @retval None
- */
+  * @brief  Define the initial system.
+  * @param  first_unused_memory : Pointer to the first unused memory
+  * @retval None
+  */
 VOID tx_application_define(VOID *first_unused_memory)
 {
   /* USER CODE BEGIN  tx_application_define_1*/
@@ -112,6 +112,7 @@ VOID tx_application_define(VOID *first_unused_memory)
     /* USER CODE BEGIN  App_ThreadX_Init_Success */
 
     /* USER CODE END  App_ThreadX_Init_Success */
+
   }
 
   if (tx_byte_pool_create(&ux_device_app_byte_pool, "Ux App memory pool", ux_device_byte_pool_buffer, UX_DEVICE_APP_MEM_POOL_SIZE) != TX_SUCCESS)
@@ -176,4 +177,5 @@ VOID tx_application_define(VOID *first_unused_memory)
   (void)first_unused_memory;
   /* USER CODE END DYNAMIC_MEM_ALLOC */
 #endif
+
 }
