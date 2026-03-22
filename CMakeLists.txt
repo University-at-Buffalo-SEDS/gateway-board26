@@ -91,6 +91,9 @@ target_link_libraries(${CMAKE_PROJECT_NAME} sedsprintf_rs)
 # Option defaults to ON
 option(ENABLE_TELEMETRY "Enable the telemetry subsystem" OFF)
 
+set(TELEMETRY_TIMESYNC_MASTER_PRIO "-1" CACHE STRING
+    "Timesync source priority. Values < 0 make this board a consumer; values >= 0 make it a source with that priority.")
+
 # Print its state for debugging
 message(STATUS "Telemetry enabled: ${ENABLE_TELEMETRY}")
 

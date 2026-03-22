@@ -34,6 +34,7 @@ SedsResult log_telemetry_synchronous(SedsDataType data_type, const void *data,
 SedsResult log_telemetry_asynchronous(SedsDataType data_type, const void *data,
                                       size_t element_count,
                                       size_t element_size);
+SedsResult log_telemetry_string_asynchronous(SedsDataType data_type, const char *str);
 
 SedsResult dispatch_tx_queue(void);
 
@@ -47,10 +48,12 @@ SedsResult process_rx_queue_timeout(uint32_t timeout_ms);
 SedsResult process_all_queues_timeout(uint32_t timeout_ms);
 
 SedsResult print_telemetry_error(int32_t error_code);
+SedsResult log_error_asynchronous(const char* fmt, ...);
+SedsResult log_error_synchronous(const char* fmt, ...);
 SedsResult log_error_asyncronous(const char* fmt, ...);
 SedsResult log_error_syncronous(const char* fmt, ...);
 
-SedsResult telemetry_timesync_request(void);
+SedsResult telemetry_poll_timesync(void);
 
 uint64_t telemetry_now_ms(void);
 
