@@ -25,6 +25,7 @@
 //  ensure the consumer sees the slot contents after observing `head` (acquire).
 
 #include "can_bus.h"
+#include "main.h"
 #include <stdint.h>
 #include <string.h>
 
@@ -266,6 +267,32 @@ typedef struct {
 
 static can_bus_reasm_slot_t g_reasm[CAN_BUS_REASM_SLOTS];
 
+static HAL_StatusTypeDef can_bus_configure_filters(FDCAN_HandleTypeDef *hfdcan) {
+  if (hfdcan == NULL) {
+    return HAL_ERROR;
+  }
+
+  return HAL_FDCAN_ConfigGlobalFilter(hfdcan,
+                                      FDCAN_ACCEPT_IN_RX_FIFO1,
+                                      FDCAN_ACCEPT_IN_RX_FIFO1,
+                                      FDCAN_REJECT_REMOTE,
+                                      FDCAN_REJECT_REMOTE);
+}
+
+static void can_bus_drain_rx_fifo(FDCAN_HandleTypeDef *hfdcan, uint32_t rx_fifo) {
+  FDCAN_RxHeaderTypeDef hdr;
+  uint8_t data[64];
+
+  while (HAL_FDCAN_GetRxFifoFillLevel(hfdcan, rx_fifo) > 0U) {
+    if (HAL_FDCAN_GetRxMessage(hfdcan, rx_fifo, &hdr, data) != HAL_OK) {
+      break;
+    }
+
+    rb_push_drop_oldest(hdr.Identifier & 0x7FFu, data,
+                        (uint8_t)can_bus_dlc_to_len(hdr.DataLength));
+  }
+}
+
 static void reasm_reset(can_bus_reasm_slot_t *s) {
   s->active = 0;
   s->std_id = 0;
@@ -433,8 +460,13 @@ static void handle_rx_frame(const can_bus_rx_frame_t *f, uint32_t now_ms) {
 void can_bus_init(FDCAN_HandleTypeDef *hfdcan) {
   g_hfdcan = hfdcan;
   // subscribers static-zeroed
-  HAL_FDCAN_ActivateNotification(hfdcan, FDCAN_IT_RX_FIFO1_NEW_MESSAGE, 0);
-  HAL_FDCAN_Start(hfdcan);
+  if (hfdcan != NULL) {
+    (void)HAL_FDCAN_Stop(hfdcan);
+    (void)can_bus_configure_filters(hfdcan);
+    (void)HAL_FDCAN_ActivateNotification(
+        hfdcan, FDCAN_IT_RX_FIFO0_NEW_MESSAGE | FDCAN_IT_RX_FIFO1_NEW_MESSAGE, 0);
+    (void)HAL_FDCAN_Start(hfdcan);
+  }
 
   // reset rings + reasm
   g_rx_head = 0;
@@ -596,31 +628,31 @@ void can_bus_process_rx(void) {
 //
 // IMPORTANT: ensure only one definition exists in the entire link.
 //
-// This ISR does minimal work: drains RX FIFO1 into our ring buffer.
+// This ISR does minimal work: drains RX FIFOs into our ring buffer.
 // Reassembly and subscriber callbacks happen in can_bus_process_rx().
+
+void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan,
+                               uint32_t RxFifo0ITs) {
+  if (hfdcan != g_hfdcan) {
+    return;
+  }
+
+  if ((RxFifo0ITs & FDCAN_IT_RX_FIFO0_NEW_MESSAGE) == 0U) {
+    return;
+  }
+
+  can_bus_drain_rx_fifo(hfdcan, FDCAN_RX_FIFO0);
+}
 
 void HAL_FDCAN_RxFifo1Callback(FDCAN_HandleTypeDef *hfdcan,
                                uint32_t RxFifo1ITs) {
-  if ((RxFifo1ITs & FDCAN_IT_RX_FIFO1_NEW_MESSAGE) == 0)
+  if (hfdcan != g_hfdcan) {
     return;
-
-  FDCAN_RxHeaderTypeDef hdr;
-  uint8_t data[64];
-
-  while (HAL_FDCAN_GetRxFifoFillLevel(hfdcan, FDCAN_RX_FIFO1) > 0) {
-    if (HAL_FDCAN_GetRxMessage(hfdcan, FDCAN_RX_FIFO1, &hdr, data) != HAL_OK) {
-      break;
-    }
-
-    // Only handle standard IDs here; extend as needed
-    uint32_t std_id = hdr.Identifier & 0x7FFu;
-
-    // hdr.DataLength is DLC code in HAL
-    size_t len = can_bus_dlc_to_len(hdr.DataLength);
-    if (len > 64)
-      len = 64;
-
-    // Push into ring; drop-oldest on overflow
-    rb_push_drop_oldest(std_id, data, (uint8_t)len);
   }
+
+  if ((RxFifo1ITs & FDCAN_IT_RX_FIFO1_NEW_MESSAGE) == 0U) {
+    return;
+  }
+
+  can_bus_drain_rx_fifo(hfdcan, FDCAN_RX_FIFO1);
 }

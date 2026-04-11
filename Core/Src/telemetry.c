@@ -272,7 +272,6 @@ SedsResult tx_send(const uint8_t *bytes, size_t len, void *user) {
 
   status = can_bus_send_large(bytes, len, 0x03);
   if (status == HAL_OK) {
-    HAL_GPIO_TogglePin(GREEN_LED_GPIO_Port, GREEN_LED_Pin);
     return SEDS_OK;
   }
 
@@ -281,6 +280,7 @@ SedsResult tx_send(const uint8_t *bytes, size_t len, void *user) {
 
 static void telemetry_can_rx(const uint8_t *data, size_t len, void *user) {
   (void)user;
+  HAL_GPIO_TogglePin(GREEN_LED_GPIO_Port, GREEN_LED_Pin);
   rx_asynchronous(data, len);
 }
 

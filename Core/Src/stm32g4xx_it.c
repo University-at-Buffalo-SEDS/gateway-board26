@@ -22,6 +22,7 @@
 #include "stm32g4xx_it.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "main.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -51,7 +52,10 @@
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
+static void telemetry_busy_delay(volatile uint32_t n)
+{
+    while (n--) { __NOP(); }
+}
 /* USER CODE END 0 */
 
 /* External variables --------------------------------------------------------*/
@@ -92,6 +96,8 @@ void HardFault_Handler(void)
   while (1)
   {
     /* USER CODE BEGIN W1_HardFault_IRQn 0 */
+    HAL_GPIO_TogglePin(GREEN_LED_GPIO_Port, GREEN_LED_Pin);
+    telemetry_busy_delay(9000000U);
     /* USER CODE END W1_HardFault_IRQn 0 */
   }
 }
