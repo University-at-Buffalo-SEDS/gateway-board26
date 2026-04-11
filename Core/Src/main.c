@@ -1,20 +1,20 @@
 /* USER CODE BEGIN Header */
 /**
-  ******************************************************************************
-  * @file           : main.c
-  * @brief          : Main program body
-  ******************************************************************************
-  * @attention
-  *
-  * Copyright (c) 2026 STMicroelectronics.
-  * All rights reserved.
-  *
-  * This software is licensed under terms that can be found in the LICENSE file
-  * in the root directory of this software component.
-  * If no LICENSE file comes with this software, it is provided AS-IS.
-  *
-  ******************************************************************************
-  */
+ ******************************************************************************
+ * @file           : main.c
+ * @brief          : Main program body
+ ******************************************************************************
+ * @attention
+ *
+ * Copyright (c) 2026 STMicroelectronics.
+ * All rights reserved.
+ *
+ * This software is licensed under terms that can be found in the LICENSE file
+ * in the root directory of this software component.
+ * If no LICENSE file comes with this software, it is provided AS-IS.
+ *
+ ******************************************************************************
+ */
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "app_threadx.h"
@@ -26,6 +26,7 @@
 #include "ux_device_class_cdc_acm.h"
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 extern UX_SLAVE_CLASS_CDC_ACM *cdc_acm;
 /* USER CODE END Includes */
 
@@ -50,6 +51,7 @@ FDCAN_HandleTypeDef hfdcan2;
 I2C_HandleTypeDef hi2c2;
 
 UART_HandleTypeDef huart1;
+UART_HandleTypeDef huart2;
 
 PCD_HandleTypeDef hpcd_USB_FS;
 
@@ -64,8 +66,9 @@ static void MX_DMA_Init(void);
 static void MX_GPIO_Init(void);
 static void MX_FDCAN2_Init(void);
 static void MX_I2C2_Init(void);
-static void MX_USART1_UART_Init(void);
 static void MX_USB_PCD_Init(void);
+static void MX_USART1_UART_Init(void);
+static void MX_USART2_UART_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -107,8 +110,9 @@ int main(void)
   MX_GPIO_Init();
   MX_FDCAN2_Init();
   MX_I2C2_Init();
-  MX_USART1_UART_Init();
   MX_USB_PCD_Init();
+  MX_USART1_UART_Init();
+  MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
 
   /* USER CODE END 2 */
@@ -309,6 +313,54 @@ static void MX_USART1_UART_Init(void)
 }
 
 /**
+  * @brief USART2 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_USART2_UART_Init(void)
+{
+
+  /* USER CODE BEGIN USART2_Init 0 */
+
+  /* USER CODE END USART2_Init 0 */
+
+  /* USER CODE BEGIN USART2_Init 1 */
+
+  /* USER CODE END USART2_Init 1 */
+  huart2.Instance = USART2;
+  huart2.Init.BaudRate = 115200;
+  huart2.Init.WordLength = UART_WORDLENGTH_8B;
+  huart2.Init.StopBits = UART_STOPBITS_1;
+  huart2.Init.Parity = UART_PARITY_NONE;
+  huart2.Init.Mode = UART_MODE_TX_RX;
+  huart2.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart2.Init.OverSampling = UART_OVERSAMPLING_16;
+  huart2.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
+  huart2.Init.ClockPrescaler = UART_PRESCALER_DIV1;
+  huart2.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+  if (HAL_UART_Init(&huart2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_UARTEx_SetTxFifoThreshold(&huart2, UART_TXFIFO_THRESHOLD_1_8) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_UARTEx_SetRxFifoThreshold(&huart2, UART_RXFIFO_THRESHOLD_1_8) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_UARTEx_EnableFifoMode(&huart2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN USART2_Init 2 */
+
+  /* USER CODE END USART2_Init 2 */
+
+}
+
+/**
   * @brief USB Initialization Function
   * @param None
   * @retval None
@@ -385,8 +437,8 @@ static void MX_GPIO_Init(void)
   /* GPIO Ports Clock Enable */
   __HAL_RCC_GPIOC_CLK_ENABLE();
   __HAL_RCC_GPIOF_CLK_ENABLE();
-  __HAL_RCC_GPIOB_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
+  __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GREEN_LED_GPIO_Port, GREEN_LED_Pin, GPIO_PIN_RESET);
@@ -434,13 +486,15 @@ static inline int tx_is_running(void)
 
 static void cdc_lock(void)
 {
-  if (!tx_is_running() || cdc_in_isr()) return;
+  if (!tx_is_running() || cdc_in_isr())
+    return;
   (void)tx_mutex_get(&cdc_mutex, TX_WAIT_FOREVER);
 }
 
 static void cdc_unlock(void)
 {
-  if (!tx_is_running() || cdc_in_isr()) return;
+  if (!tx_is_running() || cdc_in_isr())
+    return;
   (void)tx_mutex_put(&cdc_mutex);
 }
 
@@ -455,8 +509,10 @@ static inline UINT usb_cdc_ready(void)
 
 static void cdc_write_raw(const uint8_t *buf, uint16_t len)
 {
-  if (!buf || !len || cdc_in_isr()) return;
-  if (!usb_cdc_ready()) return;
+  if (!buf || !len || cdc_in_isr())
+    return;
+  if (!usb_cdc_ready())
+    return;
 
   cdc_lock();
 
@@ -482,10 +538,12 @@ static void cdc_write_raw(const uint8_t *buf, uint16_t len)
 int _write(int file, char *ptr, int len)
 {
   (void)file;
-  if (len <= 0) return 0;
+  if (len <= 0)
+    return 0;
 
   /* If USB not configured, pretend we consumed everything (best-effort debug) */
-  if (!usb_cdc_ready()) return len;
+  if (!usb_cdc_ready())
+    return len;
 
   uint8_t buf[128];
   int i = 0;
@@ -548,11 +606,13 @@ int fputc(int ch, FILE *f)
   uint8_t buf[2];
   uint16_t w = 0;
 
-  if (!usb_cdc_ready()) return ch;
+  if (!usb_cdc_ready())
+    return ch;
 
   if (ch == '\n')
   {
-    if (!last_was_cr) buf[w++] = '\r';
+    if (!last_was_cr)
+      buf[w++] = '\r';
     buf[w++] = '\n';
     last_was_cr = 0;
   }
@@ -562,7 +622,8 @@ int fputc(int ch, FILE *f)
     last_was_cr = (ch == '\r');
   }
 
-  if (w > 0) cdc_write_raw(buf, w);
+  if (w > 0)
+    cdc_write_raw(buf, w);
   return ch;
 }
 #endif

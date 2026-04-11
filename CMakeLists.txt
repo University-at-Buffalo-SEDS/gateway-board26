@@ -47,8 +47,9 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user sources here
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/can_bus.c
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/telemetry_thread.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/telemetry.c 
-    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/telemetry_hooks.c 
+    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/telemetry.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/telemetry_hooks.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/telemetry_uart.c
 )
 
 # Add include paths
@@ -103,4 +104,3 @@ if(ENABLE_TELEMETRY)
 else()
     # Not defined → disabled
 endif()
-

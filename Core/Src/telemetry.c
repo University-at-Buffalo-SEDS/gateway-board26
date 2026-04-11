@@ -3,8 +3,10 @@
 
 #include "app_threadx.h"
 #include "can_bus.h"
+#include "main.h"
 #include "sedsprintf.h"
 #include "stm32g4xx_hal.h"
+#include "telemetry_uart.h"
 
 #include <stdarg.h>
 #include <stdbool.h>
@@ -47,13 +49,16 @@ static void print_data_no_telem(void *data, size_t len) {
 
 #define TELEMETRY_TIMESYNC_ROLE_CONSUMER 0U
 #define TELEMETRY_TIMESYNC_ROLE_SOURCE 1U
-
 static uint8_t g_can_rx_subscribed = 0U;
 static int32_t g_can_side_id = -1;
 static uint8_t g_local_unix_valid = 0U;
 static uint64_t g_local_unix_ms = 0ULL;
 
 RouterState g_router = {.r = NULL, .created = 0U, .start_time = 0ULL};
+
+static void telemetry_signal_deserialize_failure(void) {
+  /* Keep GREEN_LED reserved for UART activity indication during bring-up. */
+}
 
 static uint64_t tx_raw_now_ms_locked(void) {
   const uint32_t ticks32 = (uint32_t)tx_time_get();
@@ -63,6 +68,53 @@ static uint64_t tx_raw_now_ms_locked(void) {
 static UNUSED_FUNCTION uint64_t tx_raw_now_ms(void *user) {
   (void)user;
   return tx_raw_now_ms_locked();
+}
+
+void telemetry_uart_handle_command(const uint8_t *payload, size_t len) {
+  char text[TELEMETRY_UART_MAX_PAYLOAD + 1U];
+  size_t text_len = 0U;
+
+  if (!payload || len == 0U) {
+    return;
+  }
+
+  text_len = (len > TELEMETRY_UART_MAX_PAYLOAD) ? TELEMETRY_UART_MAX_PAYLOAD : len;
+  memcpy(text, payload, text_len);
+  text[text_len] = '\0';
+  printf("[uart cmd] %s", text);
+}
+
+void telemetry_uart_handle_data(const uint8_t *payload, size_t len) {
+#ifndef TELEMETRY_ENABLED
+  (void)payload;
+  (void)len;
+#else
+  SedsResult result = SEDS_OK;
+
+  if (len == 0U) {
+    return;
+  }
+
+  if (!g_router.r && init_telemetry_router() != SEDS_OK) {
+    return;
+  }
+
+  if (telemetry_uart_side_id() >= 0) {
+    result = seds_router_rx_serialized_packet_to_queue_from_side(
+        g_router.r, (uint32_t)telemetry_uart_side_id(), payload, len);
+  } else {
+    result = seds_router_rx_serialized_packet_to_queue(g_router.r, payload, len);
+  }
+
+  if (result != SEDS_OK) {
+    telemetry_uart_note_deserialize_result(0U);
+    telemetry_signal_deserialize_failure();
+    return;
+  }
+
+  telemetry_uart_note_deserialize_result(1U);
+  (void)process_all_queues_timeout(0U);
+#endif
 }
 
 static uint8_t telemetry_timesync_is_source(void) {
@@ -211,13 +263,20 @@ static uint64_t node_now_since_ms(void *user) {
 }
 
 SedsResult tx_send(const uint8_t *bytes, size_t len, void *user) {
+  HAL_StatusTypeDef status = HAL_ERROR;
   (void)user;
 
   if (!bytes || len == 0U) {
     return SEDS_BAD_ARG;
   }
 
-  return (can_bus_send_large(bytes, len, 0x03) == HAL_OK) ? SEDS_OK : SEDS_IO;
+  status = can_bus_send_large(bytes, len, 0x03);
+  if (status == HAL_OK) {
+    HAL_GPIO_TogglePin(GREEN_LED_GPIO_Port, GREEN_LED_Pin);
+    return SEDS_OK;
+  }
+
+  return SEDS_IO;
 }
 
 static void telemetry_can_rx(const uint8_t *data, size_t len, void *user) {
@@ -231,6 +290,8 @@ void rx_asynchronous(const uint8_t *bytes, size_t len) {
   (void)len;
   return;
 #else
+  SedsResult result = SEDS_OK;
+
   if (!bytes || len == 0U) {
     return;
   }
@@ -240,10 +301,14 @@ void rx_asynchronous(const uint8_t *bytes, size_t len) {
   }
 
   if (g_can_side_id >= 0) {
-    (void)seds_router_rx_serialized_packet_to_queue_from_side(
+    result = seds_router_rx_serialized_packet_to_queue_from_side(
         g_router.r, (uint32_t)g_can_side_id, bytes, len);
   } else {
-    (void)seds_router_rx_serialized_packet_to_queue(g_router.r, bytes, len);
+    result = seds_router_rx_serialized_packet_to_queue(g_router.r, bytes, len);
+  }
+
+  if (result != SEDS_OK) {
+    telemetry_signal_deserialize_failure();
   }
 #endif
 }
@@ -332,6 +397,7 @@ SedsResult init_telemetry_router(void) {
     g_router.r = NULL;
     g_router.created = 0U;
     g_can_side_id = -1;
+    telemetry_uart_set_side_id(-1);
     return SEDS_ERR;
   }
 
@@ -341,6 +407,13 @@ SedsResult init_telemetry_router(void) {
     g_can_side_id = -1;
   }
 
+  telemetry_uart_set_side_id(
+      seds_router_add_side_serialized(r, "uart", 4U, telemetry_uart_tx_send, NULL, false));
+  if (telemetry_uart_side_id() < 0) {
+    printf("Error: failed to add UART side: %ld\r\n", (long)telemetry_uart_side_id());
+    telemetry_uart_set_side_id(-1);
+  }
+
   result = telemetry_configure_timesync_locked(r);
   if (result != SEDS_OK) {
     printf("Error: failed to configure telemetry timesync: %d\r\n", (int)result);
@@ -348,6 +421,7 @@ SedsResult init_telemetry_router(void) {
     g_router.r = NULL;
     g_router.created = 0U;
     g_can_side_id = -1;
+    telemetry_uart_set_side_id(-1);
     return result;
   }
 
@@ -358,6 +432,7 @@ SedsResult init_telemetry_router(void) {
     g_router.r = NULL;
     g_router.created = 0U;
     g_can_side_id = -1;
+    telemetry_uart_set_side_id(-1);
     return result;
   }
 

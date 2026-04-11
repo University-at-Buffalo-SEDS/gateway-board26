@@ -1,26 +1,34 @@
 // telemetry_thread.c
 #include "GB-Threads.h"
-#include "tx_api.h"
-#include "telemetry.h"
 #include "can_bus.h"
 #include "main.h"
+#include "telemetry.h"
+#include "telemetry_uart.h"
+#include "tx_api.h"
+#include <stdio.h>
+#include <string.h>
+
+extern FDCAN_HandleTypeDef hfdcan2;
+extern UART_HandleTypeDef huart2;
 
 TX_THREAD telemetry_thread;
+TX_THREAD router_test_thread;
 #define TELEMETRY_THREAD_STACK_SIZE (16U *1024U)
+#define ROUTER_TEST_THREAD_STACK_SIZE (8U * 1024U)
 
 void telemetry_thread_entry(ULONG initial_input)
 {
     (void)initial_input;
 
-    // Ensure router exists early (so we can send requests immediately)
+    can_bus_init(&hfdcan2);
+    (void)telemetry_uart_init(&huart2);
     (void)init_telemetry_router();
 
     for (;;) {
         can_bus_process_rx();
         (void)telemetry_poll_discovery();
-        (void)process_all_queues_timeout(50);
+        (void)process_all_queues_timeout(0);
         (void)telemetry_poll_timesync();
-
         tx_thread_sleep(1);
     }
 }
@@ -49,4 +57,35 @@ UINT create_telemetry_thread(TX_BYTE_POOL *byte_pool)
                                    TX_AUTO_START);
 
     return status;
+}
+
+void router_test_thread_entry(ULONG initial_input)
+{
+    (void)initial_input;
+    for (;;) {
+        telemetry_uart_process();
+        tx_thread_relinquish();
+    }
+}
+
+UINT create_router_test_thread(TX_BYTE_POOL *byte_pool)
+{
+    CHAR *pointer;
+
+    if (tx_byte_allocate(byte_pool, (VOID **)&pointer,
+                         ROUTER_TEST_THREAD_STACK_SIZE, TX_NO_WAIT) != TX_SUCCESS)
+    {
+        return TX_POOL_ERROR;
+    }
+
+    return tx_thread_create(&router_test_thread,
+                            "Router Test Thread",
+                            router_test_thread_entry,
+                            0,
+                            pointer,
+                            ROUTER_TEST_THREAD_STACK_SIZE,
+                            6,
+                            6,
+                            TX_NO_TIME_SLICE,
+                            TX_AUTO_START);
 }

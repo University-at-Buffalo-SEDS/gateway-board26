@@ -1,6 +1,5 @@
 #include "gateway_handler.h"
 #include "fdcan.h"
-#include "usart.h"
 
 HAL_StatusTypeDef Gateway_Init(void) {
     HAL_StatusTypeDef status;
@@ -56,17 +55,18 @@ void StartCommandTask(void *argument) {
     }
 }
 
+extern UART_HandleTypeDef huart2;
+
 void StartTelemetryTask(void *argument) {
-    GatewayPacket_t tel;
     for(;;) {
+        GatewayPacket_t tel;
         if (osMessageQueueGet(telQueueHandle, &tel, NULL, 10) == osOK) {
-            HAL_UART_Transmit(&huart1, (uint8_t*)&tel, sizeof(tel), 10);
+            HAL_UART_Transmit(&huart2, (uint8_t*)&tel, sizeof(tel), 10);
         }
 
-        // Check General_Fault_Sig (PC11)
         if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_11) == GPIO_PIN_SET) {
             GatewayPacket_t fault = {TARGET_ACTUATOR, 0xEE};
-            HAL_UART_Transmit(&huart1, (uint8_t*)&fault, sizeof(fault), 10);
+            HAL_UART_Transmit(&huart2, (uint8_t*)&fault, sizeof(fault), 10);
         }
         osDelay(100); 
     }
