@@ -280,7 +280,6 @@ SedsResult tx_send(const uint8_t *bytes, size_t len, void *user) {
 
 static void telemetry_can_rx(const uint8_t *data, size_t len, void *user) {
   (void)user;
-  HAL_GPIO_TogglePin(GREEN_LED_GPIO_Port, GREEN_LED_Pin);
   rx_asynchronous(data, len);
 }
 
