@@ -26,10 +26,11 @@ void telemetry_thread_entry(ULONG initial_input)
 
     for (;;) {
         can_bus_process_rx();
+        telemetry_uart_process();
         (void)telemetry_poll_discovery();
         (void)process_all_queues_timeout(0);
         (void)telemetry_poll_timesync();
-        tx_thread_relinquish();
+        tx_thread_sleep(1);
     }
 }
 
@@ -57,35 +58,4 @@ UINT create_telemetry_thread(TX_BYTE_POOL *byte_pool)
                                    TX_AUTO_START);
 
     return status;
-}
-
-void router_test_thread_entry(ULONG initial_input)
-{
-    (void)initial_input;
-    for (;;) {
-        telemetry_uart_process();
-        tx_thread_relinquish();
-    }
-}
-
-UINT create_router_test_thread(TX_BYTE_POOL *byte_pool)
-{
-    CHAR *pointer;
-
-    if (tx_byte_allocate(byte_pool, (VOID **)&pointer,
-                         ROUTER_TEST_THREAD_STACK_SIZE, TX_NO_WAIT) != TX_SUCCESS)
-    {
-        return TX_POOL_ERROR;
-    }
-
-    return tx_thread_create(&router_test_thread,
-                            "Router Test Thread",
-                            router_test_thread_entry,
-                            0,
-                            pointer,
-                            ROUTER_TEST_THREAD_STACK_SIZE,
-                            6,
-                            6,
-                            TX_NO_TIME_SLICE,
-                            TX_AUTO_START);
 }

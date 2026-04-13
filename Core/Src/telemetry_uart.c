@@ -11,6 +11,7 @@
 
 #define TELEMETRY_UART_WIRE_MAX_PAYLOAD 255U
 #define TELEMETRY_UART_HEADER_SIZE 2U
+#define UNUSED_FUNCTION __attribute__((unused))
 
 typedef struct {
   UART_HandleTypeDef *huart;
@@ -192,7 +193,7 @@ static void telemetry_uart_write_frame(uint8_t magic, const uint8_t *payload, si
   g_telemetry_uart.tx_frame_count++;
 }
 
-static uint8_t telemetry_uart_queue_push(const uint8_t *bytes, size_t len) {
+static UNUSED_FUNCTION uint8_t telemetry_uart_queue_push(const uint8_t *bytes, size_t len) {
   uint32_t primask;
   uint8_t slot;
 
