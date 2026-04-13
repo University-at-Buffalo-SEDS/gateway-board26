@@ -29,7 +29,7 @@ void telemetry_thread_entry(ULONG initial_input)
         (void)telemetry_poll_discovery();
         (void)process_all_queues_timeout(0);
         (void)telemetry_poll_timesync();
-        tx_thread_sleep(1);
+        tx_thread_relinquish();
     }
 }
 
