@@ -84,6 +84,14 @@ void telemetry_uart_handle_command(const uint8_t *payload, size_t len) {
   printf("[uart cmd] %s", text);
 }
 
+void telemetry_uart_handle_raw_ascii(const uint8_t *payload, size_t len) {
+  if (!payload || len == 0U) {
+    return;
+  }
+
+  printf("[uart raw ascii] %.*s\r\n", (int)len, (const char *)payload);
+}
+
 void telemetry_uart_handle_data(const uint8_t *payload, size_t len) {
 #ifndef TELEMETRY_ENABLED
   (void)payload;
@@ -91,7 +99,7 @@ void telemetry_uart_handle_data(const uint8_t *payload, size_t len) {
 #else
   SedsResult result = SEDS_OK;
 
-  if (len == 0U) {
+  if (payload == NULL || len == 0U) {
     return;
   }
 
@@ -108,6 +116,9 @@ void telemetry_uart_handle_data(const uint8_t *payload, size_t len) {
 
   if (result != SEDS_OK) {
     telemetry_uart_note_deserialize_result(0U);
+    (void)log_error_asynchronous("UART enqueue failed: %d len=%u\r\n", (int)result,
+                                 (unsigned)len);
+    (void)print_telemetry_error(result);
     telemetry_signal_deserialize_failure();
     return;
   }

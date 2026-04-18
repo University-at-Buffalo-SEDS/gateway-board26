@@ -15,6 +15,26 @@ TX_THREAD telemetry_thread;
 TX_THREAD router_test_thread;
 #define TELEMETRY_THREAD_STACK_SIZE (16U *1024U)
 #define ROUTER_TEST_THREAD_STACK_SIZE (8U * 1024U)
+#define BATTERY_VOLTAGE_REPORT_VALUE 14.01f
+#define BATTERY_VOLTAGE_REPORT_PERIOD_TICKS ((ULONG)TX_TIMER_TICKS_PER_SECOND)
+
+static void telemetry_report_battery_voltage_periodic(void)
+{
+    static ULONG last_report_ticks = 0U;
+    static uint8_t report_started = 0U;
+    const ULONG now_ticks = tx_time_get();
+
+    if (report_started != 0U &&
+        (ULONG)(now_ticks - last_report_ticks) < BATTERY_VOLTAGE_REPORT_PERIOD_TICKS) {
+        return;
+    }
+
+    const float battery_voltage = BATTERY_VOLTAGE_REPORT_VALUE;
+    last_report_ticks = now_ticks;
+    report_started = 1U;
+    (void)log_telemetry_asynchronous(SEDS_DT_BATTERY_VOLTAGE, &battery_voltage, 1U,
+                                     sizeof(battery_voltage));
+}
 
 void telemetry_thread_entry(ULONG initial_input)
 {
@@ -25,12 +45,18 @@ void telemetry_thread_entry(ULONG initial_input)
     (void)init_telemetry_router();
 
     for (;;) {
+        telemetry_uart_process();
         can_bus_process_rx();
         telemetry_uart_process();
+        telemetry_report_battery_voltage_periodic();
+        telemetry_uart_process();
         (void)telemetry_poll_discovery();
+        telemetry_uart_process();
         (void)process_all_queues_timeout(0);
+        telemetry_uart_process();
         (void)telemetry_poll_timesync();
-        tx_thread_sleep(1);
+        telemetry_uart_process();
+        tx_thread_relinquish();
     }
 }
 

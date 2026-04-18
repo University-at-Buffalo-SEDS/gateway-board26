@@ -8,15 +8,24 @@
 #define TELEMETRY_UART_REQ_COMMAND_MAGIC 0xA6U
 #define TELEMETRY_UART_RESP_DATA_MAGIC 0x5AU
 #define TELEMETRY_UART_RESP_COMMAND_MAGIC 0x5BU
+#define TELEMETRY_UART_REQ_RAW_ASCII_MAGIC 0xA7U
+#define TELEMETRY_UART_RESP_RAW_ASCII_MAGIC 0x7AU
 
-#define TELEMETRY_UART_WIRE_MAX_PAYLOAD 255U
-#define TELEMETRY_UART_HEADER_SIZE 2U
+#define TELEMETRY_UART_WIRE_MAX_PAYLOAD TELEMETRY_UART_MAX_PAYLOAD
+#define TELEMETRY_UART_PICO_UART_MAX_PAYLOAD 4096U
+#define TELEMETRY_UART_HEADER_SIZE 4U
 #define UNUSED_FUNCTION __attribute__((unused))
 
 typedef struct {
   UART_HandleTypeDef *huart;
   uint8_t rx_frame[TELEMETRY_UART_FRAME_SIZE];
   size_t rx_fill;
+  size_t rx_expected;
+  size_t rx_discard_remaining;
+  uint8_t nested_frame[TELEMETRY_UART_FRAME_SIZE];
+  size_t nested_fill;
+  size_t nested_expected;
+  size_t nested_discard_remaining;
 
   uint8_t tx_payloads[TELEMETRY_UART_QUEUE_DEPTH][TELEMETRY_UART_PAYLOAD_CAPACITY];
   size_t tx_lengths[TELEMETRY_UART_QUEUE_DEPTH];
@@ -31,6 +40,10 @@ typedef struct {
 
 static TelemetryUartState g_telemetry_uart = {.side_id = -1};
 
+void telemetry_uart_set_byte_pool(TX_BYTE_POOL *pool) {
+  (void)pool;
+}
+
 static uint32_t telemetry_uart_irq_save(void) {
   const uint32_t primask = __get_PRIMASK();
   __disable_irq();
@@ -43,17 +56,19 @@ static void telemetry_uart_irq_restore(uint32_t primask) {
   }
 }
 
-static uint8_t telemetry_uart_is_request_magic(uint8_t byte) {
-  return (byte == TELEMETRY_UART_REQ_DATA_MAGIC || byte == TELEMETRY_UART_REQ_COMMAND_MAGIC) ? 1U : 0U;
+static uint8_t telemetry_uart_is_first_magic(uint8_t byte) {
+  return (byte == TELEMETRY_UART_REQ_DATA_MAGIC || byte == TELEMETRY_UART_REQ_COMMAND_MAGIC ||
+          byte == TELEMETRY_UART_REQ_RAW_ASCII_MAGIC)
+             ? 1U
+             : 0U;
 }
 
-static uint8_t telemetry_uart_is_response_magic(uint8_t byte) {
-  return (byte == TELEMETRY_UART_RESP_DATA_MAGIC || byte == TELEMETRY_UART_RESP_COMMAND_MAGIC) ? 1U : 0U;
-}
-
-static uint8_t telemetry_uart_is_frame_magic(uint8_t byte) {
-  return (telemetry_uart_is_request_magic(byte) || telemetry_uart_is_response_magic(byte)) ? 1U
-                                                                                            : 0U;
+static uint8_t telemetry_uart_is_valid_header(uint8_t first, uint8_t second) {
+  return ((first == TELEMETRY_UART_REQ_DATA_MAGIC && second == TELEMETRY_UART_RESP_DATA_MAGIC) ||
+          (first == TELEMETRY_UART_REQ_COMMAND_MAGIC && second == TELEMETRY_UART_RESP_COMMAND_MAGIC) ||
+          (first == TELEMETRY_UART_REQ_RAW_ASCII_MAGIC && second == TELEMETRY_UART_RESP_RAW_ASCII_MAGIC))
+             ? 1U
+             : 0U;
 }
 
 static size_t telemetry_uart_clamp_payload_len(size_t len) {
@@ -66,46 +81,181 @@ static size_t telemetry_uart_clamp_payload_len(size_t len) {
   return len;
 }
 
-static void telemetry_uart_build_frame(uint8_t *frame, uint8_t magic, const uint8_t *payload, size_t len) {
+static uint8_t telemetry_uart_second_magic(uint8_t magic) {
+  switch (magic) {
+    case TELEMETRY_UART_REQ_COMMAND_MAGIC:
+      return TELEMETRY_UART_RESP_COMMAND_MAGIC;
+    case TELEMETRY_UART_REQ_RAW_ASCII_MAGIC:
+      return TELEMETRY_UART_RESP_RAW_ASCII_MAGIC;
+    case TELEMETRY_UART_REQ_DATA_MAGIC:
+    default:
+      return TELEMETRY_UART_RESP_DATA_MAGIC;
+  }
+}
+
+static size_t telemetry_uart_build_frame(uint8_t *frame, uint8_t magic, const uint8_t *payload, size_t len) {
   len = telemetry_uart_clamp_payload_len(len);
 
   memset(frame, 0, TELEMETRY_UART_FRAME_SIZE);
   frame[0] = magic;
-  frame[1] = (uint8_t)len;
+  frame[1] = telemetry_uart_second_magic(magic);
+  frame[2] = (uint8_t)(len & 0xFFU);
+  frame[3] = (uint8_t)((len >> 8U) & 0xFFU);
   if (payload != NULL && len != 0U) {
     memcpy(&frame[TELEMETRY_UART_HEADER_SIZE], payload, len);
   }
-}
-
-static uint8_t telemetry_uart_frame_zero_padding_valid(const uint8_t *frame) {
-  const size_t payload_len = frame[1];
-  size_t idx;
-
-  if (payload_len > TELEMETRY_UART_WIRE_MAX_PAYLOAD) {
-    return 0U;
-  }
-
-  for (idx = TELEMETRY_UART_HEADER_SIZE + payload_len; idx < TELEMETRY_UART_FRAME_SIZE; ++idx) {
-    if (frame[idx] != 0U) {
-      return 0U;
-    }
-  }
-
-  return 1U;
+  return TELEMETRY_UART_HEADER_SIZE + len;
 }
 
 static void telemetry_uart_reset_rx(void) {
   g_telemetry_uart.stats.rx_reset_count++;
   g_telemetry_uart.rx_fill = 0U;
+  g_telemetry_uart.rx_expected = 0U;
+  g_telemetry_uart.rx_discard_remaining = 0U;
+}
+
+static void telemetry_uart_reset_nested_rx(void) {
+  g_telemetry_uart.nested_fill = 0U;
+  g_telemetry_uart.nested_expected = 0U;
+  g_telemetry_uart.nested_discard_remaining = 0U;
+}
+
+static void telemetry_uart_discard_oversize_frame(size_t payload_len) {
+  g_telemetry_uart.rx_fill = 0U;
+  g_telemetry_uart.rx_expected = 0U;
+  g_telemetry_uart.rx_discard_remaining = payload_len;
+}
+
+static void telemetry_uart_discard_oversize_nested_frame(size_t payload_len) {
+  g_telemetry_uart.nested_fill = 0U;
+  g_telemetry_uart.nested_expected = 0U;
+  g_telemetry_uart.nested_discard_remaining = payload_len;
 }
 
 static void telemetry_uart_signal_parse_failure(void) {
   (void)0;
 }
 
+static void telemetry_uart_dispatch_frame(uint8_t magic, const uint8_t *payload, size_t payload_len) {
+  switch (magic) {
+    case TELEMETRY_UART_REQ_DATA_MAGIC:
+      g_telemetry_uart.stats.rx_data_frame_count++;
+      g_telemetry_uart.stats.rx_dispatch_count++;
+      telemetry_uart_handle_data(payload, payload_len);
+      break;
+
+    case TELEMETRY_UART_REQ_COMMAND_MAGIC:
+      g_telemetry_uart.stats.rx_command_frame_count++;
+      g_telemetry_uart.stats.rx_dispatch_count++;
+      telemetry_uart_handle_command(payload, payload_len);
+      break;
+
+    case TELEMETRY_UART_REQ_RAW_ASCII_MAGIC:
+      g_telemetry_uart.stats.rx_command_frame_count++;
+      g_telemetry_uart.stats.rx_dispatch_count++;
+      telemetry_uart_handle_raw_ascii(payload, payload_len);
+      break;
+
+    default:
+      break;
+  }
+}
+
+static void telemetry_uart_nested_rx_push_byte(uint8_t byte) {
+  if (g_telemetry_uart.nested_discard_remaining != 0U) {
+    g_telemetry_uart.nested_discard_remaining--;
+    return;
+  }
+
+  if (g_telemetry_uart.nested_fill == 0U) {
+    if (!telemetry_uart_is_first_magic(byte)) {
+      return;
+    }
+    g_telemetry_uart.nested_frame[0] = byte;
+    g_telemetry_uart.nested_fill = 1U;
+    return;
+  }
+
+  if (g_telemetry_uart.nested_fill == 1U) {
+    g_telemetry_uart.nested_frame[1] = byte;
+    if (!telemetry_uart_is_valid_header(g_telemetry_uart.nested_frame[0], byte)) {
+      g_telemetry_uart.stats.rx_bad_length_count++;
+      telemetry_uart_signal_parse_failure();
+      if (telemetry_uart_is_first_magic(byte)) {
+        g_telemetry_uart.nested_frame[0] = byte;
+        g_telemetry_uart.nested_fill = 1U;
+      } else {
+        telemetry_uart_reset_nested_rx();
+      }
+      return;
+    }
+    g_telemetry_uart.nested_fill = 2U;
+    return;
+  }
+
+  if (g_telemetry_uart.nested_fill == 3U) {
+    const size_t payload_len =
+        (size_t)g_telemetry_uart.nested_frame[2] | ((size_t)byte << 8U);
+    g_telemetry_uart.nested_frame[3] = byte;
+    if (payload_len > TELEMETRY_UART_WIRE_MAX_PAYLOAD) {
+      g_telemetry_uart.stats.rx_bad_length_count++;
+      telemetry_uart_signal_parse_failure();
+      if (payload_len <= TELEMETRY_UART_PICO_UART_MAX_PAYLOAD) {
+        telemetry_uart_discard_oversize_nested_frame(payload_len);
+      } else {
+        telemetry_uart_reset_nested_rx();
+      }
+      return;
+    }
+    g_telemetry_uart.nested_expected = TELEMETRY_UART_HEADER_SIZE + payload_len;
+    g_telemetry_uart.nested_fill = 4U;
+    return;
+  }
+
+  if (g_telemetry_uart.nested_fill < TELEMETRY_UART_FRAME_SIZE) {
+    g_telemetry_uart.nested_frame[g_telemetry_uart.nested_fill++] = byte;
+    if (g_telemetry_uart.nested_expected != 0U &&
+        g_telemetry_uart.nested_fill == g_telemetry_uart.nested_expected) {
+      const size_t payload_len =
+          (size_t)g_telemetry_uart.nested_frame[2] |
+          ((size_t)g_telemetry_uart.nested_frame[3] << 8U);
+      g_telemetry_uart.stats.rx_frame_count++;
+      telemetry_uart_dispatch_frame(
+          g_telemetry_uart.nested_frame[0],
+          &g_telemetry_uart.nested_frame[TELEMETRY_UART_HEADER_SIZE],
+          payload_len);
+      telemetry_uart_reset_nested_rx();
+    }
+    return;
+  }
+
+  telemetry_uart_signal_parse_failure();
+  telemetry_uart_reset_nested_rx();
+}
+
+static void telemetry_uart_dispatch_data_payload(const uint8_t *payload, size_t payload_len) {
+  size_t idx;
+
+  if (g_telemetry_uart.nested_fill == 0U &&
+      g_telemetry_uart.nested_discard_remaining == 0U &&
+      (payload_len < 2U || !telemetry_uart_is_valid_header(payload[0], payload[1]))) {
+    telemetry_uart_dispatch_frame(TELEMETRY_UART_REQ_DATA_MAGIC, payload, payload_len);
+    return;
+  }
+
+  for (idx = 0U; idx < payload_len; ++idx) {
+    telemetry_uart_nested_rx_push_byte(payload[idx]);
+  }
+}
+
 static void telemetry_uart_rx_push_byte(uint8_t byte) {
+  if (g_telemetry_uart.rx_discard_remaining != 0U) {
+    g_telemetry_uart.rx_discard_remaining--;
+    return;
+  }
+
   if (g_telemetry_uart.rx_fill == 0U) {
-    if (!telemetry_uart_is_frame_magic(byte)) {
+    if (!telemetry_uart_is_first_magic(byte)) {
       return;
     }
     g_telemetry_uart.rx_frame[0] = byte;
@@ -115,10 +265,10 @@ static void telemetry_uart_rx_push_byte(uint8_t byte) {
 
   if (g_telemetry_uart.rx_fill == 1U) {
     g_telemetry_uart.rx_frame[1] = byte;
-    if (byte > TELEMETRY_UART_WIRE_MAX_PAYLOAD) {
+    if (!telemetry_uart_is_valid_header(g_telemetry_uart.rx_frame[0], byte)) {
       g_telemetry_uart.stats.rx_bad_length_count++;
       telemetry_uart_signal_parse_failure();
-      if (telemetry_uart_is_frame_magic(byte)) {
+      if (telemetry_uart_is_first_magic(byte)) {
         g_telemetry_uart.rx_frame[0] = byte;
         g_telemetry_uart.rx_fill = 1U;
       } else {
@@ -127,6 +277,26 @@ static void telemetry_uart_rx_push_byte(uint8_t byte) {
       return;
     }
     g_telemetry_uart.rx_fill = 2U;
+    return;
+  }
+
+  if (g_telemetry_uart.rx_fill == 3U) {
+    const size_t payload_len =
+        (size_t)g_telemetry_uart.rx_frame[2] | ((size_t)byte << 8U);
+    g_telemetry_uart.rx_frame[3] = byte;
+    if (payload_len > TELEMETRY_UART_WIRE_MAX_PAYLOAD) {
+      g_telemetry_uart.stats.rx_bad_length_count++;
+      telemetry_uart_signal_parse_failure();
+      if (payload_len <= TELEMETRY_UART_PICO_UART_MAX_PAYLOAD) {
+        telemetry_uart_discard_oversize_frame(payload_len);
+      } else {
+        telemetry_uart_reset_rx();
+      }
+      return;
+    }
+
+    g_telemetry_uart.rx_expected = TELEMETRY_UART_HEADER_SIZE + payload_len;
+    g_telemetry_uart.rx_fill = 4U;
     return;
   }
 
@@ -182,14 +352,15 @@ static uint8_t telemetry_uart_try_read_byte(uint8_t *out) {
 
 static void telemetry_uart_write_frame(uint8_t magic, const uint8_t *payload, size_t len) {
   uint8_t frame[TELEMETRY_UART_FRAME_SIZE];
+  size_t frame_len = 0U;
 
   if (g_telemetry_uart.huart == NULL) {
     return;
   }
 
   len = telemetry_uart_clamp_payload_len(len);
-  telemetry_uart_build_frame(frame, magic, payload, len);
-  (void)HAL_UART_Transmit(g_telemetry_uart.huart, frame, sizeof(frame), 100U);
+  frame_len = telemetry_uart_build_frame(frame, magic, payload, len);
+  (void)HAL_UART_Transmit(g_telemetry_uart.huart, frame, (uint16_t)frame_len, 100U);
   g_telemetry_uart.tx_frame_count++;
 }
 
@@ -274,38 +445,24 @@ void telemetry_uart_process(void) {
   while (telemetry_uart_try_read_byte(&byte)) {
     telemetry_uart_rx_push_byte(byte);
 
-    if (g_telemetry_uart.rx_fill != TELEMETRY_UART_FRAME_SIZE) {
-      continue;
-    }
-
-    if (!telemetry_uart_frame_zero_padding_valid(g_telemetry_uart.rx_frame)) {
-      g_telemetry_uart.stats.rx_bad_padding_count++;
-      telemetry_uart_signal_parse_failure();
-      telemetry_uart_reset_rx();
+    if (g_telemetry_uart.rx_expected == 0U ||
+        g_telemetry_uart.rx_fill != g_telemetry_uart.rx_expected) {
       continue;
     }
 
     g_telemetry_uart.stats.rx_frame_count++;
+    const size_t payload_len =
+        (size_t)g_telemetry_uart.rx_frame[2] | ((size_t)g_telemetry_uart.rx_frame[3] << 8U);
 
-    switch (g_telemetry_uart.rx_frame[0]) {
-      case TELEMETRY_UART_REQ_DATA_MAGIC:
-      case TELEMETRY_UART_RESP_DATA_MAGIC:
-        g_telemetry_uart.stats.rx_data_frame_count++;
-        g_telemetry_uart.stats.rx_dispatch_count++;
-        telemetry_uart_handle_data(&g_telemetry_uart.rx_frame[TELEMETRY_UART_HEADER_SIZE],
-                                   (size_t)g_telemetry_uart.rx_frame[1]);
-        break;
-
-      case TELEMETRY_UART_REQ_COMMAND_MAGIC:
-      case TELEMETRY_UART_RESP_COMMAND_MAGIC:
-        g_telemetry_uart.stats.rx_command_frame_count++;
-        g_telemetry_uart.stats.rx_dispatch_count++;
-        telemetry_uart_handle_command(&g_telemetry_uart.rx_frame[TELEMETRY_UART_HEADER_SIZE],
-                                      (size_t)g_telemetry_uart.rx_frame[1]);
-        break;
-
-      default:
-        break;
+    if (g_telemetry_uart.rx_frame[0] == TELEMETRY_UART_REQ_DATA_MAGIC) {
+      telemetry_uart_dispatch_data_payload(
+          &g_telemetry_uart.rx_frame[TELEMETRY_UART_HEADER_SIZE],
+          payload_len);
+    } else {
+      telemetry_uart_dispatch_frame(
+          g_telemetry_uart.rx_frame[0],
+          &g_telemetry_uart.rx_frame[TELEMETRY_UART_HEADER_SIZE],
+          payload_len);
     }
 
     telemetry_uart_reset_rx();

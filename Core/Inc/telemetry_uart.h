@@ -2,6 +2,7 @@
 
 #include "sedsprintf.h"
 #include "stm32g4xx_hal.h"
+#include "tx_api.h"
 #include <stddef.h>
 #include <stdint.h>
 
@@ -9,10 +10,10 @@
 extern "C" {
 #endif
 
-#define TELEMETRY_UART_FRAME_SIZE 258U
-#define TELEMETRY_UART_FRAME_HEADER_SIZE 2U
+#define TELEMETRY_UART_FRAME_HEADER_SIZE 4U
+#define TELEMETRY_UART_MAX_PAYLOAD 256U
+#define TELEMETRY_UART_FRAME_SIZE (TELEMETRY_UART_FRAME_HEADER_SIZE + TELEMETRY_UART_MAX_PAYLOAD)
 #define TELEMETRY_UART_PAYLOAD_CAPACITY (TELEMETRY_UART_FRAME_SIZE - TELEMETRY_UART_FRAME_HEADER_SIZE)
-#define TELEMETRY_UART_MAX_PAYLOAD 255U
 
 typedef struct {
   uint32_t rx_byte_count;
@@ -32,6 +33,7 @@ typedef struct {
 } TelemetryUartStats;
 
 SedsResult telemetry_uart_init(UART_HandleTypeDef *huart);
+void telemetry_uart_set_byte_pool(TX_BYTE_POOL *pool);
 void telemetry_uart_process(void);
 
 SedsResult telemetry_uart_tx_send(const uint8_t *bytes, size_t len, void *user);
@@ -47,6 +49,7 @@ int32_t telemetry_uart_side_id(void);
 
 void telemetry_uart_handle_command(const uint8_t *payload, size_t len);
 void telemetry_uart_handle_data(const uint8_t *payload, size_t len);
+void telemetry_uart_handle_raw_ascii(const uint8_t *payload, size_t len);
 
 #ifdef __cplusplus
 }
