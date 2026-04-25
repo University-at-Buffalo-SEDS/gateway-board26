@@ -103,6 +103,15 @@ void telemetry_uart_handle_data(const uint8_t *payload, size_t len) {
     return;
   }
 
+  result = seds_pkt_validate_serialized(payload, len);
+  if (result != SEDS_OK) {
+    telemetry_uart_note_deserialize_result(0U);
+    (void)log_error_asynchronous("UART dropped invalid serialized payload: %d len=%u\r\n",
+                                 (int)result, (unsigned)len);
+    telemetry_signal_deserialize_failure();
+    return;
+  }
+
   if (!g_router.r && init_telemetry_router() != SEDS_OK) {
     return;
   }
