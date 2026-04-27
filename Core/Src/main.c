@@ -32,7 +32,10 @@ extern UX_SLAVE_CLASS_CDC_ACM *cdc_acm;
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-
+static void busy_delay(volatile uint32_t n)
+{
+  while (n--) { __NOP(); }
+}
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -669,6 +672,8 @@ void Error_Handler(void)
   __disable_irq();
   while (1)
   {
+    HAL_GPIO_TogglePin(GREEN_LED_GPIO_Port, GREEN_LED_Pin);
+    busy_delay(1000000);
   }
   /* USER CODE END Error_Handler_Debug */
 }
