@@ -24,6 +24,9 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "main.h"
+#ifdef TELEMETRY_BOARD_LINK_UART
+#include "board_link_uart.h"
+#endif
 #include "sedsprintf.h"
 #include "telemetry.h"
 #include "telemetry_uart.h"
@@ -73,6 +76,9 @@ UINT App_ThreadX_Init(VOID *memory_ptr)
   /* USER CODE BEGIN App_ThreadX_Init */
   telemetry_set_byte_pool(byte_pool);
   telemetry_uart_set_byte_pool(byte_pool);
+#ifdef TELEMETRY_BOARD_LINK_UART
+  board_link_uart_set_byte_pool(byte_pool);
+#endif
   /* Initialize telemetry lock used by Rust (telemetry_lock/telemetry_unlock). */
   telemetry_init_lock();
 

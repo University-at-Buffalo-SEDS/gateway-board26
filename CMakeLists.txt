@@ -50,6 +50,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/telemetry.c
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/telemetry_hooks.c
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/telemetry_uart.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/board_link_uart.c
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/ltc2990.c
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/data_acq.c
 )
@@ -94,6 +95,7 @@ target_link_libraries(${CMAKE_PROJECT_NAME} sedsprintf_rs)
 
 # Option defaults to ON
 option(ENABLE_TELEMETRY "Enable the telemetry subsystem" ON)
+option(ENABLE_TELEMETRY_BOARD_LINK_UART "Enable board-to-board telemetry side on LPUART1" ON)
 
 set(TELEMETRY_TIMESYNC_MASTER_PRIO "-1" CACHE STRING
     "Timesync source priority. Values < 0 make this board a consumer; values >= 0 make it a source with that priority.")
@@ -106,4 +108,8 @@ if(ENABLE_TELEMETRY)
     add_compile_definitions(TELEMETRY_ENABLED)
 else()
     # Not defined → disabled
+endif()
+
+if(ENABLE_TELEMETRY_BOARD_LINK_UART)
+    add_compile_definitions(TELEMETRY_BOARD_LINK_UART)
 endif()

@@ -47,6 +47,9 @@ void telemetry_uart_note_deserialize_result(uint8_t success);
 void telemetry_uart_set_side_id(int32_t side_id);
 int32_t telemetry_uart_side_id(void);
 
+void telemetry_uart_handle_rx_event(UART_HandleTypeDef *huart, uint16_t size);
+void telemetry_uart_handle_error(UART_HandleTypeDef *huart);
+
 void telemetry_uart_handle_command(const uint8_t *payload, size_t len);
 void telemetry_uart_handle_data(const uint8_t *payload, size_t len);
 void telemetry_uart_handle_raw_ascii(const uint8_t *payload, size_t len);

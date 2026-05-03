@@ -1,5 +1,8 @@
 // telemetry_thread.c
 #include "GB-Threads.h"
+#ifdef TELEMETRY_BOARD_LINK_UART
+#include "board_link_uart.h"
+#endif
 #include "can_bus.h"
 #include "main.h"
 #include "telemetry.h"
@@ -10,6 +13,9 @@
 #define michaeal_please_read_my_uart_data_and_decode_it_correctly_and_pass_it_to_the_telemetry_library_thanks_a_bunch_we_love_you_michael telemetry_uart_process()
 
 extern FDCAN_HandleTypeDef hfdcan2;
+#ifdef TELEMETRY_BOARD_LINK_UART
+extern UART_HandleTypeDef hlpuart1;
+#endif
 extern UART_HandleTypeDef huart2;
 
 TX_THREAD telemetry_thread;
@@ -23,16 +29,26 @@ void telemetry_thread_entry(ULONG initial_input)
 
     can_bus_init(&hfdcan2);
     (void)telemetry_uart_init(&huart2);
+#ifdef TELEMETRY_BOARD_LINK_UART
+    board_link_uart_init(&hlpuart1);
+    (void)board_link_uart_start_rx();
+#endif
     (void)init_telemetry_router();
 
     for (;;)
     {
         michaeal_please_read_my_uart_data_and_decode_it_correctly_and_pass_it_to_the_telemetry_library_thanks_a_bunch_we_love_you_michael;
+#ifdef TELEMETRY_BOARD_LINK_UART
+        board_link_uart_process();
+#endif
         can_bus_process_rx();
         michaeal_please_read_my_uart_data_and_decode_it_correctly_and_pass_it_to_the_telemetry_library_thanks_a_bunch_we_love_you_michael;
         (void)telemetry_poll_discovery();
         michaeal_please_read_my_uart_data_and_decode_it_correctly_and_pass_it_to_the_telemetry_library_thanks_a_bunch_we_love_you_michael;
         (void)process_all_queues_timeout(50);
+#ifdef TELEMETRY_BOARD_LINK_UART
+        board_link_uart_process();
+#endif
         michaeal_please_read_my_uart_data_and_decode_it_correctly_and_pass_it_to_the_telemetry_library_thanks_a_bunch_we_love_you_michael;
         (void)telemetry_poll_timesync();
         michaeal_please_read_my_uart_data_and_decode_it_correctly_and_pass_it_to_the_telemetry_library_thanks_a_bunch_we_love_you_michael;

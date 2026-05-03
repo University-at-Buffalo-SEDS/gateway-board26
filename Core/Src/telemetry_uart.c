@@ -1,5 +1,8 @@
 #include "telemetry_uart.h"
 
+#ifdef TELEMETRY_BOARD_LINK_UART
+#include "board_link_uart.h"
+#endif
 #include "main.h"
 #include <string.h>
 
@@ -545,4 +548,30 @@ void telemetry_uart_set_side_id(int32_t side_id) {
 
 int32_t telemetry_uart_side_id(void) {
   return g_telemetry_uart.side_id;
+}
+
+void telemetry_uart_handle_rx_event(UART_HandleTypeDef *huart, uint16_t size) {
+  (void)huart;
+  (void)size;
+}
+
+void telemetry_uart_handle_error(UART_HandleTypeDef *huart) {
+  (void)huart;
+}
+
+void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size) {
+#ifdef TELEMETRY_BOARD_LINK_UART
+  board_link_uart_handle_rx_event(huart, Size);
+#else
+  (void)huart;
+  (void)Size;
+#endif
+}
+
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart) {
+#ifdef TELEMETRY_BOARD_LINK_UART
+  board_link_uart_handle_error(huart);
+#else
+  (void)huart;
+#endif
 }
