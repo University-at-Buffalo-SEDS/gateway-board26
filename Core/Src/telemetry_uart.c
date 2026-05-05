@@ -6,7 +6,7 @@
 #include "main.h"
 #include <string.h>
 
-#define TELEMETRY_UART_QUEUE_DEPTH 8U
+#define TELEMETRY_UART_QUEUE_DEPTH 32U
 #define TELEMETRY_UART_REQ_DATA_MAGIC 0xA5U
 #define TELEMETRY_UART_REQ_COMMAND_MAGIC 0xA6U
 #define TELEMETRY_UART_RESP_DATA_MAGIC 0x5AU
@@ -17,10 +17,22 @@
 #define TELEMETRY_UART_WIRE_MAX_PAYLOAD TELEMETRY_UART_MAX_PAYLOAD
 #define TELEMETRY_UART_PICO_UART_MAX_PAYLOAD 4096U
 #define TELEMETRY_UART_HEADER_SIZE 4U
+#define TELEMETRY_UART_RX_DMA_BUF_SIZE 512U
+#define TELEMETRY_UART_RX_RING_DEPTH 16U
 #define UNUSED_FUNCTION __attribute__((unused))
 
 typedef struct {
+  uint16_t len;
+  uint8_t data[TELEMETRY_UART_RX_DMA_BUF_SIZE];
+} TelemetryUartRxItem;
+
+typedef struct {
   UART_HandleTypeDef *huart;
+  uint8_t rx_dma_buf[TELEMETRY_UART_RX_DMA_BUF_SIZE];
+  TelemetryUartRxItem rx_ring[TELEMETRY_UART_RX_RING_DEPTH];
+  volatile uint32_t rx_head;
+  volatile uint32_t rx_tail;
+  volatile uint32_t rx_count;
   uint8_t rx_frame[TELEMETRY_UART_FRAME_SIZE];
   size_t rx_fill;
   size_t rx_expected;
@@ -37,6 +49,19 @@ typedef struct {
   uint8_t tx_count;
 
   uint32_t tx_frame_count;
+  uint8_t rx_dma_active;
+  uint32_t rx_dma_start_ok_count;
+  uint32_t rx_dma_start_busy_count;
+  uint32_t rx_dma_start_error_count;
+  uint32_t rx_dma_event_count;
+  uint32_t rx_dma_idle_event_count;
+  uint32_t rx_dma_tc_event_count;
+  uint32_t rx_dma_ht_event_count;
+  uint32_t rx_dma_drop_count;
+  uint32_t rx_restart_error_count;
+  uint32_t rx_dma_last_size;
+  uint32_t rx_dma_last_event_type;
+  uint32_t rx_dma_last_error_code;
   int32_t side_id;
   TelemetryUartStats stats;
 } TelemetryUartState;
@@ -57,6 +82,112 @@ static void telemetry_uart_irq_restore(uint32_t primask) {
   if (primask == 0U) {
     __enable_irq();
   }
+}
+
+static void telemetry_uart_dispatch_frame(uint8_t magic, const uint8_t *payload,
+                                          size_t payload_len);
+static void telemetry_uart_dispatch_data_payload(const uint8_t *payload,
+                                                 size_t payload_len);
+static void telemetry_uart_rx_push_byte(uint8_t byte);
+static void telemetry_uart_reset_rx(void);
+
+static HAL_StatusTypeDef telemetry_uart_start_rx_dma(void) {
+  HAL_StatusTypeDef status;
+
+  if (g_telemetry_uart.huart == NULL) {
+    return HAL_ERROR;
+  }
+
+  __HAL_UART_CLEAR_FLAG(g_telemetry_uart.huart,
+                        UART_CLEAR_PEF | UART_CLEAR_FEF | UART_CLEAR_NEF |
+                            UART_CLEAR_OREF | UART_CLEAR_IDLEF);
+
+  status = HAL_UARTEx_ReceiveToIdle_DMA(g_telemetry_uart.huart,
+                                        g_telemetry_uart.rx_dma_buf,
+                                        TELEMETRY_UART_RX_DMA_BUF_SIZE);
+  g_telemetry_uart.rx_dma_last_error_code = g_telemetry_uart.huart->ErrorCode;
+  if (status == HAL_OK && g_telemetry_uart.huart->hdmarx != NULL) {
+    __HAL_DMA_DISABLE_IT(g_telemetry_uart.huart->hdmarx, DMA_IT_HT);
+    g_telemetry_uart.rx_dma_active = 1U;
+    g_telemetry_uart.rx_dma_start_ok_count++;
+  } else {
+    g_telemetry_uart.rx_dma_active = 0U;
+    if (status == HAL_BUSY) {
+      g_telemetry_uart.rx_dma_start_busy_count++;
+    } else {
+      g_telemetry_uart.rx_dma_start_error_count++;
+    }
+  }
+
+  return status;
+}
+
+static void telemetry_uart_rx_ring_push_isr(const uint8_t *data, uint16_t len) {
+  TelemetryUartRxItem *item;
+
+  if (data == NULL || len == 0U) {
+    return;
+  }
+
+  if (len > TELEMETRY_UART_RX_DMA_BUF_SIZE) {
+    len = TELEMETRY_UART_RX_DMA_BUF_SIZE;
+  }
+
+  if (g_telemetry_uart.rx_count >= TELEMETRY_UART_RX_RING_DEPTH) {
+    g_telemetry_uart.rx_dma_drop_count++;
+    return;
+  }
+
+  item = &g_telemetry_uart.rx_ring[g_telemetry_uart.rx_tail];
+  item->len = len;
+  memcpy(item->data, data, len);
+  g_telemetry_uart.rx_tail =
+      (g_telemetry_uart.rx_tail + 1U) % TELEMETRY_UART_RX_RING_DEPTH;
+  g_telemetry_uart.rx_count++;
+}
+
+static uint8_t telemetry_uart_rx_ring_pop(TelemetryUartRxItem *out) {
+  uint8_t have = 0U;
+  const uint32_t primask = telemetry_uart_irq_save();
+
+  if (out != NULL && g_telemetry_uart.rx_count > 0U) {
+    *out = g_telemetry_uart.rx_ring[g_telemetry_uart.rx_head];
+    g_telemetry_uart.rx_head =
+        (g_telemetry_uart.rx_head + 1U) % TELEMETRY_UART_RX_RING_DEPTH;
+    g_telemetry_uart.rx_count--;
+    have = 1U;
+  }
+
+  telemetry_uart_irq_restore(primask);
+  return have;
+}
+
+static void telemetry_uart_process_rx_byte(uint8_t byte) {
+  telemetry_uart_rx_push_byte(byte);
+  g_telemetry_uart.stats.rx_byte_count++;
+
+  if (g_telemetry_uart.rx_expected == 0U ||
+      g_telemetry_uart.rx_fill != g_telemetry_uart.rx_expected) {
+    return;
+  }
+
+  g_telemetry_uart.stats.rx_frame_count++;
+  const size_t payload_len =
+      (size_t)g_telemetry_uart.rx_frame[2] |
+      ((size_t)g_telemetry_uart.rx_frame[3] << 8U);
+
+  if (g_telemetry_uart.rx_frame[0] == TELEMETRY_UART_REQ_DATA_MAGIC) {
+    telemetry_uart_dispatch_data_payload(
+        &g_telemetry_uart.rx_frame[TELEMETRY_UART_HEADER_SIZE],
+        payload_len);
+  } else {
+    telemetry_uart_dispatch_frame(
+        g_telemetry_uart.rx_frame[0],
+        &g_telemetry_uart.rx_frame[TELEMETRY_UART_HEADER_SIZE],
+        payload_len);
+  }
+
+  telemetry_uart_reset_rx();
 }
 
 static uint8_t telemetry_uart_is_first_magic(uint8_t byte) {
@@ -316,47 +447,6 @@ static void telemetry_uart_rx_push_byte(uint8_t byte) {
   telemetry_uart_reset_rx();
 }
 
-static uint8_t telemetry_uart_try_read_byte(uint8_t *out) {
-  uint32_t error_flags = 0U;
-  USART_TypeDef *instance = NULL;
-
-  if (g_telemetry_uart.huart == NULL || out == NULL) {
-    return 0U;
-  }
-
-  instance = g_telemetry_uart.huart->Instance;
-  if ((READ_BIT(instance->CR1, USART_CR1_UE | USART_CR1_RE) !=
-       (USART_CR1_UE | USART_CR1_RE)) ||
-      (READ_BIT(instance->ISR, USART_ISR_REACK) == 0U)) {
-    g_telemetry_uart.stats.rx_not_ready_count++;
-    return 0U;
-  }
-
-  error_flags = __HAL_UART_GET_FLAG(g_telemetry_uart.huart, UART_FLAG_PE) |
-                __HAL_UART_GET_FLAG(g_telemetry_uart.huart, UART_FLAG_FE) |
-                __HAL_UART_GET_FLAG(g_telemetry_uart.huart, UART_FLAG_NE) |
-                __HAL_UART_GET_FLAG(g_telemetry_uart.huart, UART_FLAG_ORE);
-
-  if (error_flags != 0U) {
-    g_telemetry_uart.stats.rx_hw_error_count++;
-    __HAL_UART_CLEAR_FLAG(g_telemetry_uart.huart,
-                          UART_CLEAR_PEF | UART_CLEAR_FEF | UART_CLEAR_NEF | UART_CLEAR_OREF);
-  }
-
-  if (__HAL_UART_GET_FLAG(g_telemetry_uart.huart, UART_FLAG_IDLE) != RESET) {
-    g_telemetry_uart.stats.rx_idle_line_count++;
-    __HAL_UART_CLEAR_FLAG(g_telemetry_uart.huart, UART_CLEAR_IDLEF);
-  }
-
-  if (__HAL_UART_GET_FLAG(g_telemetry_uart.huart, UART_FLAG_RXNE) != RESET) {
-    *out = (uint8_t)(instance->RDR & 0xFFU);
-    g_telemetry_uart.stats.rx_byte_count++;
-    return 1U;
-  }
-
-  return 0U;
-}
-
 static void telemetry_uart_write_frame(uint8_t magic, const uint8_t *payload, size_t len) {
   uint8_t frame[TELEMETRY_UART_FRAME_SIZE];
   size_t frame_len = 0U;
@@ -443,36 +533,22 @@ SedsResult telemetry_uart_init(UART_HandleTypeDef *huart) {
   g_telemetry_uart.huart = huart;
   g_telemetry_uart.side_id = -1;
   HAL_GPIO_WritePin(GREEN_LED_GPIO_Port, GREEN_LED_Pin, GPIO_PIN_RESET);
+
+  (void)telemetry_uart_start_rx_dma();
   return SEDS_OK;
 }
 
 void telemetry_uart_process(void) {
-  uint8_t byte = 0U;
+  TelemetryUartRxItem item;
 
-  while (telemetry_uart_try_read_byte(&byte)) {
-    telemetry_uart_rx_push_byte(byte);
-
-    if (g_telemetry_uart.rx_expected == 0U ||
-        g_telemetry_uart.rx_fill != g_telemetry_uart.rx_expected) {
-      continue;
+  while (telemetry_uart_rx_ring_pop(&item)) {
+    for (size_t idx = 0U; idx < (size_t)item.len; ++idx) {
+      telemetry_uart_process_rx_byte(item.data[idx]);
     }
+  }
 
-    g_telemetry_uart.stats.rx_frame_count++;
-    const size_t payload_len =
-        (size_t)g_telemetry_uart.rx_frame[2] | ((size_t)g_telemetry_uart.rx_frame[3] << 8U);
-
-    if (g_telemetry_uart.rx_frame[0] == TELEMETRY_UART_REQ_DATA_MAGIC) {
-      telemetry_uart_dispatch_data_payload(
-          &g_telemetry_uart.rx_frame[TELEMETRY_UART_HEADER_SIZE],
-          payload_len);
-    } else {
-      telemetry_uart_dispatch_frame(
-          g_telemetry_uart.rx_frame[0],
-          &g_telemetry_uart.rx_frame[TELEMETRY_UART_HEADER_SIZE],
-          payload_len);
-    }
-
-    telemetry_uart_reset_rx();
+  if (g_telemetry_uart.rx_dma_active == 0U) {
+    (void)telemetry_uart_start_rx_dma();
   }
 
   telemetry_uart_flush_tx_queue();
@@ -532,6 +608,19 @@ void telemetry_uart_get_stats(TelemetryUartStats *out) {
 
   *out = g_telemetry_uart.stats;
   out->tx_frame_count = g_telemetry_uart.tx_frame_count;
+  out->rx_dma_active = g_telemetry_uart.rx_dma_active;
+  out->rx_dma_start_ok_count = g_telemetry_uart.rx_dma_start_ok_count;
+  out->rx_dma_start_busy_count = g_telemetry_uart.rx_dma_start_busy_count;
+  out->rx_dma_start_error_count = g_telemetry_uart.rx_dma_start_error_count;
+  out->rx_dma_event_count = g_telemetry_uart.rx_dma_event_count;
+  out->rx_dma_idle_event_count = g_telemetry_uart.rx_dma_idle_event_count;
+  out->rx_dma_tc_event_count = g_telemetry_uart.rx_dma_tc_event_count;
+  out->rx_dma_ht_event_count = g_telemetry_uart.rx_dma_ht_event_count;
+  out->rx_dma_drop_count = g_telemetry_uart.rx_dma_drop_count;
+  out->rx_restart_error_count = g_telemetry_uart.rx_restart_error_count;
+  out->rx_dma_last_size = g_telemetry_uart.rx_dma_last_size;
+  out->rx_dma_last_event_type = g_telemetry_uart.rx_dma_last_event_type;
+  out->rx_dma_last_error_code = g_telemetry_uart.rx_dma_last_error_code;
 }
 
 void telemetry_uart_note_deserialize_result(uint8_t success) {
@@ -551,27 +640,56 @@ int32_t telemetry_uart_side_id(void) {
 }
 
 void telemetry_uart_handle_rx_event(UART_HandleTypeDef *huart, uint16_t size) {
-  (void)huart;
-  (void)size;
+  if (g_telemetry_uart.huart == NULL || huart == NULL ||
+      huart->Instance != g_telemetry_uart.huart->Instance) {
+    return;
+  }
+
+  const HAL_UART_RxEventTypeTypeDef event_type = HAL_UARTEx_GetRxEventType(huart);
+  g_telemetry_uart.rx_dma_event_count++;
+  g_telemetry_uart.rx_dma_last_size = size;
+  g_telemetry_uart.rx_dma_last_event_type = event_type;
+  g_telemetry_uart.rx_dma_last_error_code = huart->ErrorCode;
+  if (event_type == HAL_UART_RXEVENT_IDLE) {
+    g_telemetry_uart.rx_dma_idle_event_count++;
+  } else if (event_type == HAL_UART_RXEVENT_TC) {
+    g_telemetry_uart.rx_dma_tc_event_count++;
+  } else if (event_type == HAL_UART_RXEVENT_HT) {
+    g_telemetry_uart.rx_dma_ht_event_count++;
+  }
+
+  telemetry_uart_rx_ring_push_isr(g_telemetry_uart.rx_dma_buf, size);
+  if (telemetry_uart_start_rx_dma() != HAL_OK) {
+    g_telemetry_uart.rx_dma_active = 0U;
+    g_telemetry_uart.rx_restart_error_count++;
+  }
 }
 
 void telemetry_uart_handle_error(UART_HandleTypeDef *huart) {
-  (void)huart;
+  if (g_telemetry_uart.huart == NULL || huart == NULL ||
+      huart->Instance != g_telemetry_uart.huart->Instance) {
+    return;
+  }
+
+  g_telemetry_uart.stats.rx_hw_error_count++;
+  g_telemetry_uart.rx_dma_last_error_code = huart->ErrorCode;
+  (void)HAL_UART_AbortReceive(huart);
+  if (telemetry_uart_start_rx_dma() != HAL_OK) {
+    g_telemetry_uart.rx_dma_active = 0U;
+    g_telemetry_uart.rx_restart_error_count++;
+  }
 }
 
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size) {
+  telemetry_uart_handle_rx_event(huart, Size);
 #ifdef TELEMETRY_BOARD_LINK_UART
   board_link_uart_handle_rx_event(huart, Size);
-#else
-  (void)huart;
-  (void)Size;
 #endif
 }
 
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart) {
+  telemetry_uart_handle_error(huart);
 #ifdef TELEMETRY_BOARD_LINK_UART
   board_link_uart_handle_error(huart);
-#else
-  (void)huart;
 #endif
 }

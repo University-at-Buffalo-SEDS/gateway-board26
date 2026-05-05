@@ -95,7 +95,10 @@ target_link_libraries(${CMAKE_PROJECT_NAME} sedsprintf_rs)
 
 # Option defaults to ON
 option(ENABLE_TELEMETRY "Enable the telemetry subsystem" ON)
-option(ENABLE_TELEMETRY_BOARD_LINK_UART "Enable board-to-board telemetry side on LPUART1" ON)
+set(ENABLE_TELEMETRY ON CACHE BOOL "Enable the telemetry subsystem" FORCE)
+option(ENABLE_TELEMETRY_BOARD_LINK_UART "Enable board-to-board telemetry side on LPUART1" OFF)
+set(ENABLE_TELEMETRY_BOARD_LINK_UART OFF CACHE BOOL
+    "Enable board-to-board telemetry side on LPUART1" FORCE)
 
 set(TELEMETRY_TIMESYNC_MASTER_PRIO "-1" CACHE STRING
     "Timesync source priority. Values < 0 make this board a consumer; values >= 0 make it a source with that priority.")

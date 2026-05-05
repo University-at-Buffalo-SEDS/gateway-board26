@@ -22,6 +22,8 @@ TX_THREAD telemetry_thread;
 TX_THREAD router_test_thread;
 #define TELEMETRY_THREAD_STACK_SIZE (16U * 1024U)
 #define ROUTER_TEST_THREAD_STACK_SIZE (8U * 1024U)
+#define TELEMETRY_QUEUE_SERVICE_BUDGET_MS 5U
+#define TELEMETRY_THREAD_SLEEP_TICKS 1U
 
 void telemetry_thread_entry(ULONG initial_input)
 {
@@ -42,17 +44,14 @@ void telemetry_thread_entry(ULONG initial_input)
         board_link_uart_process();
 #endif
         can_bus_process_rx();
-        michaeal_please_read_my_uart_data_and_decode_it_correctly_and_pass_it_to_the_telemetry_library_thanks_a_bunch_we_love_you_michael;
         (void)telemetry_poll_discovery();
-        michaeal_please_read_my_uart_data_and_decode_it_correctly_and_pass_it_to_the_telemetry_library_thanks_a_bunch_we_love_you_michael;
-        (void)process_all_queues_timeout(50);
+        (void)telemetry_poll_timesync();
+        (void)process_all_queues_timeout(TELEMETRY_QUEUE_SERVICE_BUDGET_MS);
 #ifdef TELEMETRY_BOARD_LINK_UART
         board_link_uart_process();
 #endif
-        michaeal_please_read_my_uart_data_and_decode_it_correctly_and_pass_it_to_the_telemetry_library_thanks_a_bunch_we_love_you_michael;
         (void)telemetry_poll_timesync();
-        michaeal_please_read_my_uart_data_and_decode_it_correctly_and_pass_it_to_the_telemetry_library_thanks_a_bunch_we_love_you_michael;
-        tx_thread_sleep(1);
+        tx_thread_sleep(TELEMETRY_THREAD_SLEEP_TICKS);
     }
 }
 
