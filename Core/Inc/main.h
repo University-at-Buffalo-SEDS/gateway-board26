@@ -57,6 +57,8 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
+#define CONTINUITY_Pin GPIO_PIN_0
+#define CONTINUITY_GPIO_Port GPIOB
 #define GREEN_LED_Pin GPIO_PIN_11
 #define GREEN_LED_GPIO_Port GPIOB
 
