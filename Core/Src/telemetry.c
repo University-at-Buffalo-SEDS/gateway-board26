@@ -1,5 +1,6 @@
 // telemetry.c
 #include "telemetry.h"
+#include "ota_stream.h"
 
 #include "app_threadx.h"
 #ifdef TELEMETRY_BOARD_LINK_UART
@@ -535,6 +536,15 @@ SedsResult init_telemetry_router(void) {
     g_board_link_side_id = -1;
 #endif
     telemetry_uart_set_side_id(-1);
+    return result;
+  }
+
+  result = ota_stream_init(r);
+  if (result != SEDS_OK) {
+    printf("Error: failed to bind OTA stream: %d\r\n", (int)result);
+    seds_router_free(r);
+    g_router.r = NULL;
+    g_router.created = 0U;
     return result;
   }
 

@@ -6,6 +6,7 @@
 #include "can_bus.h"
 #include "main.h"
 #include "telemetry.h"
+#include "ota_stream.h"
 #include "telemetry_uart.h"
 #include "tx_api.h"
 #include <stdio.h>
@@ -46,6 +47,7 @@ void telemetry_thread_entry(ULONG initial_input)
         can_bus_process_rx();
         (void)telemetry_poll_discovery();
         (void)telemetry_poll_timesync();
+        ota_stream_poll();
         (void)process_all_queues_timeout(TELEMETRY_QUEUE_SERVICE_BUDGET_MS);
 #ifdef TELEMETRY_BOARD_LINK_UART
         board_link_uart_process();
