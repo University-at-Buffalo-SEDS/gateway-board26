@@ -27,7 +27,7 @@
 #ifdef TELEMETRY_BOARD_LINK_UART
 #include "board_link_uart.h"
 #endif
-#include "sedsprintf.h"
+#include "sedsnet_config.h"
 #include "telemetry.h"
 #include "telemetry_uart.h"
 #include "GB-Threads.h"

@@ -1,6 +1,6 @@
 #include "ltc2990.h"
 #include "main.h"
-#include "sedsprintf.h"
+#include "sedsnet_config.h"
 #include "telemetry.h"
 
 #include <math.h>

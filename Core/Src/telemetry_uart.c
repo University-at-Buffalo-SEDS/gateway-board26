@@ -373,7 +373,7 @@ static void telemetry_uart_dispatch_data_payload(const uint8_t *payload, size_t 
   if (g_telemetry_uart.nested_fill == 0U &&
       g_telemetry_uart.nested_discard_remaining == 0U &&
       (payload_len < 2U || !telemetry_uart_is_valid_header(payload[0], payload[1]))) {
-    if (seds_pkt_validate_serialized(payload, payload_len) != SEDS_OK) {
+    if (seds_pkt_validate_packed(payload, payload_len) != SEDS_OK) {
       telemetry_uart_signal_parse_failure();
       return;
     }
