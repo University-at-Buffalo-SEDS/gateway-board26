@@ -4,7 +4,7 @@
   "memory": {
     "flash_base": 134217728,
     "flash_size": 524288,
-    "ram_size": 114688,
+    "ram_regions": [{"name": "sram", "base": 536870912, "size": 114688}],
     "bootloader_size": 16384,
     "slot_a_base": 134234112,
     "slot_a_size": 491520,
@@ -31,13 +31,5 @@
   "ota": {
     "chunk_size": 512
   },
-  "peripherals": [
-    {
-      "type": "adc",
-      "name": "gateway_adc",
-      "bits": 12,
-      "channels": 4,
-      "failure_every": 997
-    }
-  ]
+  "peripherals": []
 }
