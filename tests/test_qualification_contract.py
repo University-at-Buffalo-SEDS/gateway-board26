@@ -6,6 +6,23 @@ import build
 
 
 class QualificationContractTests(unittest.TestCase):
+    def test_gateway_transports_v4_topology_packets_and_recovers_can(self):
+        root = Path(build.__file__).resolve().parent
+        uart_h = (root / "Core" / "Inc" / "telemetry_uart.h").read_text(
+            encoding="utf-8"
+        )
+        uart_c = (root / "Core" / "Src" / "telemetry_uart.c").read_text(
+            encoding="utf-8"
+        )
+        can = (root / "Core" / "Src" / "can_bus.c").read_text(encoding="utf-8")
+
+        self.assertIn("#define TELEMETRY_UART_MAX_PAYLOAD 1024U", uart_h)
+        self.assertIn("#define TELEMETRY_UART_QUEUE_DEPTH 8U", uart_c)
+        self.assertIn("#define TELEMETRY_UART_RX_RING_DEPTH 8U", uart_c)
+        self.assertIn("can_bus_recover_if_bus_off", can)
+        self.assertIn("can_bus_wait_for_tx_slot", can)
+        self.assertIn("HAL_FDCAN_AbortTxRequest", can)
+
     def test_full_runner_profiles_memory_and_linked_network(self):
         root = Path(build.__file__).resolve().parent
         runner = (root / "sim" / "run_full.py").read_text(encoding="utf-8")

@@ -45,6 +45,10 @@
 #define CAN_BUS_POLLING 1
 #endif
 
+#ifndef CAN_BUS_TX_ENQUEUE_TIMEOUT_MS
+#define CAN_BUS_TX_ENQUEUE_TIMEOUT_MS 5U
+#endif
+
 // =========================
 // FD DLC helpers
 // =========================
@@ -180,6 +184,48 @@ static volatile uint32_t g_rx_dropped_frames = 0;
 volatile uint32_t g_fdcan_rx_count = 0;
 volatile uint32_t g_fdcan_tx_ok_count = 0;
 volatile uint32_t g_fdcan_tx_fail_count = 0;
+volatile uint32_t g_fdcan_bus_off_count = 0;
+volatile uint32_t g_fdcan_recovery_count = 0;
+
+static HAL_StatusTypeDef can_bus_recover_if_bus_off(void) {
+  FDCAN_ProtocolStatusTypeDef protocol_status;
+
+  if (g_hfdcan == NULL ||
+      HAL_FDCAN_GetProtocolStatus(g_hfdcan, &protocol_status) != HAL_OK) {
+    return HAL_ERROR;
+  }
+  if (protocol_status.BusOff == 0U) {
+    return HAL_OK;
+  }
+
+  g_fdcan_bus_off_count++;
+  (void)HAL_FDCAN_AbortTxRequest(
+      g_hfdcan, FDCAN_TX_BUFFER0 | FDCAN_TX_BUFFER1 | FDCAN_TX_BUFFER2);
+  if (HAL_FDCAN_Stop(g_hfdcan) != HAL_OK ||
+      HAL_FDCAN_Start(g_hfdcan) != HAL_OK) {
+    return HAL_ERROR;
+  }
+  g_fdcan_recovery_count++;
+  return HAL_OK;
+}
+
+/* A v4 topology packet needs more fragments than the three hardware slots. */
+static HAL_StatusTypeDef can_bus_wait_for_tx_slot(void) {
+  const uint32_t started_ms = HAL_GetTick();
+
+  for (;;) {
+    if (can_bus_recover_if_bus_off() != HAL_OK) {
+      return HAL_ERROR;
+    }
+    if (HAL_FDCAN_GetTxFifoFreeLevel(g_hfdcan) > 0U) {
+      return HAL_OK;
+    }
+    if ((uint32_t)(HAL_GetTick() - started_ms) >=
+        (uint32_t)CAN_BUS_TX_ENQUEUE_TIMEOUT_MS) {
+      return HAL_TIMEOUT;
+    }
+  }
+}
 static can_bus_rx_frame_t g_rx_ring[CAN_BUS_RX_RING_DEPTH];
 
 static inline uint16_t rb_next(uint16_t v) {
@@ -528,6 +574,12 @@ HAL_StatusTypeDef can_bus_send_bytes(const uint8_t *bytes, size_t len,
   if (!bytes || len == 0)
     return HAL_ERROR;
 
+  const HAL_StatusTypeDef slot_status = can_bus_wait_for_tx_slot();
+  if (slot_status != HAL_OK) {
+    g_fdcan_tx_fail_count++;
+    return slot_status;
+  }
+
   if (len > 64)
     len = 64;
 
@@ -633,6 +685,8 @@ HAL_StatusTypeDef can_bus_send_large(const uint8_t *bytes, size_t len,
 void can_bus_process_rx(void) {
   uint32_t now = HAL_GetTick();
   reasm_expire_old(now);
+
+  (void)can_bus_recover_if_bus_off();
 
 #if CAN_BUS_POLLING
   if (g_hfdcan != NULL) {
