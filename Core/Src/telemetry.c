@@ -71,7 +71,6 @@ RouterState g_router = {.r = NULL, .created = 0U, .start_time = 0ULL};
 volatile uint32_t g_telemetry_discovery_seen = 0U;
 volatile uint32_t g_telemetry_timesync_valid = 0U;
 volatile uint32_t g_telemetry_network_ready = 0U;
-static int32_t g_telemetry_discovery_baseline_len = -1;
 
 static void telemetry_signal_deserialize_failure(void) {
   /* Keep GREEN_LED reserved for UART activity indication during bring-up. */
@@ -350,6 +349,8 @@ static void telemetry_board_link_rx(const uint8_t *data, size_t len, void *user)
 
   if (result != SEDS_OK) {
     telemetry_signal_deserialize_failure();
+  } else {
+    g_telemetry_discovery_seen = 1U;
   }
 #else
   (void)data;
@@ -383,6 +384,8 @@ void rx_asynchronous(const uint8_t *bytes, size_t len) {
 
   if (result != SEDS_OK) {
     telemetry_signal_deserialize_failure();
+  } else {
+    g_telemetry_discovery_seen = 1U;
   }
 #endif
 }
@@ -412,12 +415,6 @@ static UNUSED_FUNCTION void rx_synchronous(const uint8_t *bytes, size_t len) {
 
 static void telemetry_update_network_health(SedsRouter *router) {
   uint64_t network_time_ms = 0ULL;
-  const int32_t topology_len = seds_router_export_topology_len(router);
-
-  if (g_telemetry_discovery_baseline_len > 0 &&
-      topology_len > g_telemetry_discovery_baseline_len) {
-    g_telemetry_discovery_seen = 1U;
-  }
   if (seds_router_get_network_time_ms(router, &network_time_ms) == SEDS_OK) {
     g_telemetry_timesync_valid = 1U;
   }
@@ -576,7 +573,6 @@ SedsResult init_telemetry_router(void) {
     return result;
   }
 
-  g_telemetry_discovery_baseline_len = seds_router_export_topology_len(r);
   /* Discovery begins from the normal poll loop after link startup. */
 
   g_router.r = r;
