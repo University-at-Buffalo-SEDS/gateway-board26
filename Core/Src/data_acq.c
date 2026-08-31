@@ -10,7 +10,7 @@ extern I2C_HandleTypeDef hi2c2;
 
 TX_THREAD data_acq_thread;
 
-#define DATA_ACQ_THREAD_STACK_SIZE (8U * 1024U)
+#define DATA_ACQ_THREAD_STACK_SIZE (4U * 1024U)
 #define DATA_ACQ_REPORT_PERIOD_TICKS ((ULONG)TX_TIMER_TICKS_PER_SECOND)
 
 static LTC2990_Handle_t ltc2990_voltage_handle;
