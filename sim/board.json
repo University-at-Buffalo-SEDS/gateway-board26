@@ -34,6 +34,8 @@
     "virtual_time_ms": 750,
     "sample_count": 1,
     "memory_probe_warmup_samples": 0,
+    "hal_tick_address": 536889012,
+    "hal_tick_step": 100,
     "memory_probes": [
       {"name": "network_ready", "symbol": "g_telemetry_network_ready"},
       {"name": "discovery_seen", "symbol": "g_telemetry_discovery_seen"},
