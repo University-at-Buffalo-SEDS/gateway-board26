@@ -12,7 +12,7 @@ import time
 SIMULATOR_REPOSITORY = (
     "https://github.com/University-at-Buffalo-SEDS/FirmwareSimulator.git"
 )
-SIMULATOR_INTERFACE_VERSION = "0.3.1"
+SIMULATOR_INTERFACE_VERSION = "0.3.2"
 FIRMWARE_BRANCH = "migration/sedlaunch-sedsnet-mainline"
 FIRMWARE_ORGANIZATION = "University-at-Buffalo-SEDS"
 
@@ -276,7 +276,9 @@ def run_network_simulation(
         probes = layout.get("execution", {}).get("memory_probes", [])
         layout["execution"]["memory_probes"] = [
             probe for probe in probes
-            if probe.get("name") in {"network_ready", "discovery_seen", "timesync_valid"}
+            if probe.get("name") in {"network_ready", "discovery_seen", "timesync_valid",
+                                     "fdcan_rx", "fdcan_tx_ok", "fdcan_tx_fail"}
+                                     | {"panics", "allocation_failures"}
         ]
         layout["execution"]["memory_probe_warmup_samples"] = 3
     current_can = "fdcan2" if current_layout["architecture"] == "stm32g4" else "fdcan1"

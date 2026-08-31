@@ -47,7 +47,7 @@ class QualificationContractTests(unittest.TestCase):
         telemetry = (root / "Core" / "Src" / "telemetry.c").read_text(encoding="utf-8")
         cmake = (root / "CMakeLists.txt").read_text(encoding="utf-8")
         self.assertIn('seds_router_add_side_packed(r, "can", 3U, tx_send, NULL, false)', telemetry)
-        self.assertIn('SEDSNET_MAX_QUEUE_BUDGET "12288"', cmake)
+        self.assertIn('SEDSNET_MAX_QUEUE_BUDGET "8192"', cmake)
 
 
 if __name__ == "__main__":

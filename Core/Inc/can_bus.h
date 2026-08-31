@@ -25,6 +25,14 @@ HAL_StatusTypeDef can_bus_send_large(const uint8_t *bytes, size_t len, uint32_t 
  */
 void can_bus_process_rx(void);
 
+/* Number of frames rejected because the ISR-to-thread ring was full. */
+uint32_t can_bus_rx_dropped_frames(void);
+
+#ifdef CAN_BUS_TEST
+/* Host-test ingress hook; never present in production firmware. */
+void can_bus_test_inject(uint32_t std_id, const uint8_t *data, size_t len);
+#endif
+
 
 /*
  * Subscribe a callback to RX events (FIFO1).
