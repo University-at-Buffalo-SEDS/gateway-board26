@@ -1,4 +1,5 @@
 #include "telemetry_uart.h"
+#include "sim_network_probe.h"
 
 #ifdef TELEMETRY_BOARD_LINK_UART
 #include "board_link_uart.h"
@@ -67,6 +68,9 @@ typedef struct {
 } TelemetryUartState;
 
 static TelemetryUartState g_telemetry_uart = {.side_id = -1};
+volatile uint32_t g_gateway_uart_rx_frames = 0U;
+volatile uint32_t g_gateway_uart_tx_frames = 0U;
+volatile uint32_t g_gateway_uart_tx_queue_drops = 0U;
 
 void telemetry_uart_set_byte_pool(TX_BYTE_POOL *pool) {
   (void)pool;
@@ -102,6 +106,11 @@ static HAL_StatusTypeDef telemetry_uart_start_rx_dma(void) {
                         UART_CLEAR_PEF | UART_CLEAR_FEF | UART_CLEAR_NEF |
                             UART_CLEAR_OREF | UART_CLEAR_IDLEF);
 
+#ifdef SEDS_FIRMWARE_SIM_TEST
+  status = HAL_OK;
+  g_telemetry_uart.rx_dma_active = 1U;
+  g_telemetry_uart.rx_dma_start_ok_count++;
+#else
   status = HAL_UARTEx_ReceiveToIdle_DMA(g_telemetry_uart.huart,
                                         g_telemetry_uart.rx_dma_buf,
                                         TELEMETRY_UART_RX_DMA_BUF_SIZE);
@@ -118,6 +127,7 @@ static HAL_StatusTypeDef telemetry_uart_start_rx_dma(void) {
       g_telemetry_uart.rx_dma_start_error_count++;
     }
   }
+#endif
 
   return status;
 }
@@ -172,6 +182,7 @@ static void telemetry_uart_process_rx_byte(uint8_t byte) {
   }
 
   g_telemetry_uart.stats.rx_frame_count++;
+  g_gateway_uart_rx_frames++;
   const size_t payload_len =
       (size_t)g_telemetry_uart.rx_frame[2] |
       ((size_t)g_telemetry_uart.rx_frame[3] << 8U);
@@ -459,6 +470,7 @@ static void telemetry_uart_write_frame(uint8_t magic, const uint8_t *payload, si
   frame_len = telemetry_uart_build_frame(frame, magic, payload, len);
   (void)HAL_UART_Transmit(g_telemetry_uart.huart, frame, (uint16_t)frame_len, 100U);
   g_telemetry_uart.tx_frame_count++;
+  g_gateway_uart_tx_frames++;
 }
 
 static UNUSED_FUNCTION uint8_t telemetry_uart_queue_push(const uint8_t *bytes, size_t len) {
@@ -477,8 +489,9 @@ static UNUSED_FUNCTION uint8_t telemetry_uart_queue_push(const uint8_t *bytes, s
   primask = telemetry_uart_irq_save();
 
   if (g_telemetry_uart.tx_count >= TELEMETRY_UART_QUEUE_DEPTH) {
-    g_telemetry_uart.tx_head = (uint8_t)((g_telemetry_uart.tx_head + 1U) % TELEMETRY_UART_QUEUE_DEPTH);
-    g_telemetry_uart.tx_count--;
+    g_gateway_uart_tx_queue_drops++;
+    telemetry_uart_irq_restore(primask);
+    return 0U;
   }
 
   slot = g_telemetry_uart.tx_tail;
@@ -541,6 +554,13 @@ SedsResult telemetry_uart_init(UART_HandleTypeDef *huart) {
 void telemetry_uart_process(void) {
   TelemetryUartRxItem item;
 
+#ifdef SEDS_FIRMWARE_SIM_TEST
+  while (__HAL_UART_GET_FLAG(g_telemetry_uart.huart, UART_FLAG_RXNE) != RESET) {
+    const uint8_t byte = (uint8_t)g_telemetry_uart.huart->Instance->RDR;
+    telemetry_uart_process_rx_byte(byte);
+  }
+#endif
+
   while (telemetry_uart_rx_ring_pop(&item)) {
     for (size_t idx = 0U; idx < (size_t)item.len; ++idx) {
       telemetry_uart_process_rx_byte(item.data[idx]);
@@ -555,14 +575,18 @@ void telemetry_uart_process(void) {
 }
 
 SedsResult telemetry_uart_tx_send(const uint8_t *bytes, size_t len, void *user) {
+  extern volatile uint32_t g_sim_uart_egress_peer_mask;
   (void)user;
 
   if (bytes == NULL || len == 0U) {
     return SEDS_BAD_ARG;
   }
 
-  telemetry_uart_send_data_frame(bytes, len);
-  return SEDS_OK;
+#ifdef SEDS_FIRMWARE_SIM_TEST
+  g_sim_uart_egress_peer_mask |= sim_probe_peer_bit_packed(bytes, len);
+#endif
+
+  return telemetry_uart_queue_push(bytes, len) ? SEDS_OK : SEDS_IO;
 }
 
 void telemetry_uart_send_data_frame(const uint8_t *payload, size_t len) {
@@ -686,6 +710,19 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size) {
   board_link_uart_handle_rx_event(huart, Size);
 #endif
 }
+
+#ifdef SEDS_FIRMWARE_SIM_TEST
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
+  if (g_telemetry_uart.huart == NULL || huart == NULL ||
+      huart->Instance != g_telemetry_uart.huart->Instance) return;
+  g_telemetry_uart.rx_dma_event_count++;
+  telemetry_uart_rx_ring_push_isr(g_telemetry_uart.rx_dma_buf, 1U);
+  g_telemetry_uart.rx_dma_active = 0U;
+  if (telemetry_uart_start_rx_dma() != HAL_OK) {
+    g_telemetry_uart.rx_restart_error_count++;
+  }
+}
+#endif
 
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart) {
   telemetry_uart_handle_error(huart);

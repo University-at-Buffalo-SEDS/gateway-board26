@@ -1,5 +1,6 @@
 // telemetry.c
 #include "telemetry.h"
+#include "sim_network_probe.h"
 #include "ota_stream.h"
 
 #include "app_threadx.h"
@@ -71,6 +72,18 @@ RouterState g_router = {.r = NULL, .created = 0U, .start_time = 0ULL};
 volatile uint32_t g_telemetry_discovery_seen = 0U;
 volatile uint32_t g_telemetry_timesync_valid = 0U;
 volatile uint32_t g_telemetry_network_ready = 0U;
+volatile uint32_t g_telemetry_peer_mask = 0U;
+volatile uint32_t g_sim_heartbeat_attempts = 0U;
+volatile uint32_t g_sim_heartbeat_ok = 0U;
+volatile uint32_t g_sim_heartbeat_fail = 0U;
+volatile uint32_t g_sim_heartbeat_wire_tx = 0U;
+volatile uint32_t g_sim_uart_egress_peer_mask = 0U;
+volatile uint32_t g_sim_can_heartbeat_ingress_mask = 0U;
+volatile uint32_t g_sim_can_rx_callback_count = 0U;
+volatile uint32_t g_sim_can_heartbeat_count = 0U;
+volatile uint32_t g_sim_can_heartbeat_unrecognized = 0U;
+volatile uint32_t g_sim_can_last_data_type = 0U;
+volatile uint32_t g_sim_can_last_source_address = 0U;
 
 static void telemetry_signal_deserialize_failure(void) {
   /* Keep GREEN_LED reserved for UART activity indication during bring-up. */
@@ -118,6 +131,7 @@ void telemetry_uart_handle_data(const uint8_t *payload, size_t len) {
   if (payload == NULL || len == 0U) {
     return;
   }
+  sim_probe_observe_packed(payload, len);
 
   result = seds_pkt_validate_packed(payload, len);
   if (result != SEDS_OK) {
@@ -306,8 +320,13 @@ SedsResult tx_send(const uint8_t *bytes, size_t len, void *user) {
   }
   HAL_GPIO_TogglePin(GREEN_LED_GPIO_Port, GREEN_LED_Pin);
 
-  status = can_bus_send_large(bytes, len, 0x03);
+  const uint32_t can_id =
+      sim_probe_packed_data_type(bytes, len) == (uint32_t)SEDS_DT_HEARTBEAT
+          ? 0x004U
+          : 0x104U;
+  status = can_bus_send_large(bytes, len, can_id);
   if (status == HAL_OK) {
+    sim_probe_observe_can_tx(bytes, len);
     return SEDS_OK;
   }
 
@@ -322,6 +341,20 @@ static SedsResult board_link_tx_send(const uint8_t *bytes, size_t len, void *use
 
 static void telemetry_can_rx(const uint8_t *data, size_t len, void *user) {
   (void)user;
+  sim_probe_observe_packed(data, len);
+#ifdef SEDS_FIRMWARE_SIM_TEST
+  g_sim_can_rx_callback_count++;
+  g_sim_can_last_data_type = sim_probe_packed_data_type(data, len);
+  g_sim_can_last_source_address = sim_probe_packed_source_address(data, len);
+  if (g_sim_can_last_data_type == (uint32_t)SEDS_DT_HEARTBEAT) {
+    const uint32_t bit = sim_probe_peer_bit_packed(data, len);
+    g_sim_can_heartbeat_count++;
+    g_sim_can_heartbeat_ingress_mask |= bit;
+    if (bit == 0U) {
+      g_sim_can_heartbeat_unrecognized++;
+    }
+  }
+#endif
   rx_asynchronous(data, len);
 }
 
@@ -458,7 +491,11 @@ SedsResult telemetry_poll_discovery(void) {
     return SEDS_ERR;
   }
 
-  const SedsResult result = seds_router_poll_discovery(g_router.r, NULL);
+  bool did_queue = false;
+  const SedsResult result = seds_router_poll_discovery(g_router.r, &did_queue);
+  if (result == SEDS_OK) {
+    sim_probe_emit_heartbeat(g_router.r, telemetry_now_ms());
+  }
   telemetry_update_network_health(g_router.r);
   return result;
 #endif
@@ -496,8 +533,7 @@ SedsResult init_telemetry_router(void) {
   }
 #endif
 
-  r = seds_router_new(Seds_RM_Relay, node_now_since_ms, NULL, NULL,
-                      0U);
+  r = seds_router_new(Seds_RM_Relay, node_now_since_ms, NULL, NULL, 0U);
   if (!r) {
     printf("Error: failed to create router\r\n");
     g_router.r = NULL;
@@ -516,7 +552,11 @@ SedsResult init_telemetry_router(void) {
     g_can_side_id = -1;
   }
 
-  uart_side_id = seds_router_add_side_packed(r, "uart", 4U, telemetry_uart_tx_send, NULL, true);
+  /* The Pico-Fi/GroundStation transport already owns link delivery. Keep the
+   * packed SEDSNet side symmetric with RF's radio side; enabling hop ACKs on
+   * only this endpoint leaves every frame awaiting an ACK that RF never emits
+   * and exhausts the Gateway pool. */
+  uart_side_id = seds_router_add_side_packed(r, "uart", 4U, telemetry_uart_tx_send, NULL, false);
   telemetry_uart_set_side_id(uart_side_id);
   if (uart_side_id < 0) {
     printf("Error: failed to add UART side: %ld\r\n", (long)uart_side_id);
@@ -546,6 +586,24 @@ SedsResult init_telemetry_router(void) {
 #ifdef TELEMETRY_BOARD_LINK_UART
     g_board_link_side_id = -1;
 #endif
+    telemetry_uart_set_side_id(-1);
+    return SEDS_ERR;
+  }
+
+  if (seds_router_set_route(r, g_can_side_id, uart_side_id, true) != SEDS_OK ||
+      seds_router_set_route(r, uart_side_id, g_can_side_id, true) != SEDS_OK ||
+      seds_router_set_source_route_mode(r, -1, Seds_RSM_Fanout) != SEDS_OK ||
+      seds_router_set_source_route_mode(r, g_can_side_id, Seds_RSM_Fanout) != SEDS_OK ||
+      seds_router_set_source_route_mode(r, uart_side_id, Seds_RSM_Fanout) != SEDS_OK ||
+      seds_router_set_typed_route(r, g_can_side_id, SEDS_DT_HEARTBEAT,
+                                  uart_side_id, true) != SEDS_OK ||
+      seds_router_set_typed_route(r, uart_side_id, SEDS_DT_HEARTBEAT,
+                                  g_can_side_id, true) != SEDS_OK) {
+    printf("Error: failed to configure explicit CAN/UART relay routes\r\n");
+    seds_router_free(r);
+    g_router.r = NULL;
+    g_router.created = 0U;
+    g_can_side_id = -1;
     telemetry_uart_set_side_id(-1);
     return SEDS_ERR;
   }

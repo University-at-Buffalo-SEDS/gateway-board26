@@ -14,6 +14,11 @@ volatile uint32_t g_telemetry_alloc_fail = 0U;
 volatile uint32_t g_telemetry_panic_count = 0U;
 volatile uint32_t g_telemetry_alloc_count = 0U;
 volatile uint32_t g_telemetry_free_count = 0U;
+volatile uint32_t g_telemetry_last_alloc_request = 0U;
+volatile uint32_t g_telemetry_max_alloc_request = 0U;
+volatile uint32_t g_telemetry_alloc_failure_request = 0U;
+volatile uint32_t g_telemetry_alloc_failure_available = 0U;
+volatile uint32_t g_telemetry_alloc_failure_fragments = 0U;
 volatile ULONG g_telemetry_pool_available = 0U;
 volatile ULONG g_telemetry_pool_low_water = ~0UL;
 volatile ULONG g_telemetry_pool_fragments = 0U;
@@ -179,6 +184,11 @@ void *telemetryMalloc(size_t xSize)
         /* Rust allocator contract expects non-NULL for successful alloc. */
         xSize = 1U;
     }
+    g_telemetry_last_alloc_request = (uint32_t)xSize;
+    if (xSize > g_telemetry_max_alloc_request)
+    {
+        g_telemetry_max_alloc_request = (uint32_t)xSize;
+    }
 
     /*
      * Allow a brief wait so telemetry bursts don't immediately fail allocator
@@ -186,6 +196,14 @@ void *telemetryMalloc(size_t xSize)
      */
     if (tx_byte_allocate(rust_byte_pool_external, &ptr, xSize, 5) != TX_SUCCESS)
     {
+        ULONG available = 0U;
+        ULONG fragments = 0U;
+        (void)tx_byte_pool_info_get(rust_byte_pool_external, TX_NULL,
+                                    &available, &fragments,
+                                    TX_NULL, TX_NULL, TX_NULL);
+        g_telemetry_alloc_failure_request = (uint32_t)xSize;
+        g_telemetry_alloc_failure_available = available;
+        g_telemetry_alloc_failure_fragments = fragments;
         g_telemetry_alloc_fail++;
         return NULL;
     }
