@@ -31,7 +31,7 @@
     "dma_routes": []
   },
   "execution": {
-    "virtual_time_ms": 750,
+    "virtual_time_ms": 20,
     "sample_count": 1,
     "memory_probe_warmup_samples": 0,
     "require_stack_probe": true,
