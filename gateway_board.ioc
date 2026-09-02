@@ -363,7 +363,7 @@ STMicroelectronics.X-CUBE-AZRTOS-G4.2.0.0.IPParameters=UX_DEVICE_APP_MEM_POOL_SI
 STMicroelectronics.X-CUBE-AZRTOS-G4.2.0.0.REG_USBX_DEVICE_CON_CK=1
 STMicroelectronics.X-CUBE-AZRTOS-G4.2.0.0.RTOSJjThreadX_Checked=true
 STMicroelectronics.X-CUBE-AZRTOS-G4.2.0.0.TX_APP_GENERATE_INIT_CODE=true
-STMicroelectronics.X-CUBE-AZRTOS-G4.2.0.0.TX_APP_MEM_POOL_SIZE=50000
+STMicroelectronics.X-CUBE-AZRTOS-G4.2.0.0.TX_APP_MEM_POOL_SIZE=62288
 STMicroelectronics.X-CUBE-AZRTOS-G4.2.0.0.TX_TIMER_TICKS_PER_SECOND=1000
 STMicroelectronics.X-CUBE-AZRTOS-G4.2.0.0.ThreadXCcRTOSJjThreadXJjCore=true
 STMicroelectronics.X-CUBE-AZRTOS-G4.2.0.0.ThreadXCcRTOSJjThreadXJjLowOoPowerOosupport=true
@@ -380,7 +380,7 @@ STMicroelectronics.X-CUBE-AZRTOS-G4.2.0.0.USBXCcUSBJjUSBXJjUXOoDeviceOoControlle
 STMicroelectronics.X-CUBE-AZRTOS-G4.2.0.0.USBXCcUSBJjUSBXJjUXOoDeviceOoCoreStack=true
 STMicroelectronics.X-CUBE-AZRTOS-G4.2.0.0.USBX_DEVICE_APP_THREAD_Size=5120
 STMicroelectronics.X-CUBE-AZRTOS-G4.2.0.0.USBX_DEVICE_SYS_SIZE=5120
-STMicroelectronics.X-CUBE-AZRTOS-G4.2.0.0.UX_DEVICE_APP_MEM_POOL_SIZE=25000
+STMicroelectronics.X-CUBE-AZRTOS-G4.2.0.0.UX_DEVICE_APP_MEM_POOL_SIZE=20904
 STMicroelectronics.X-CUBE-AZRTOS-G4.2.0.0.UX_SLAVE_REQUEST_DATA_MAX_LENGTH=512
 STMicroelectronics.X-CUBE-AZRTOS-G4.2.0.0_IsAnAzureRtosMw=true
 STMicroelectronics.X-CUBE-AZRTOS-G4.2.0.0_SwParameter=ThreadXCcRTOSJjThreadXJjLowOoPowerOosupport\:true;USBXCcUSBJjUSBXJjUXOoDeviceOoControllers\:true;USBXCcUSBJjUSBXJjCoreSystem\:true;ThreadXCcRTOSJjThreadXJjPerformanceInfo\:true;ThreadXCcRTOSJjThreadXJjTraceXOosupport\:true;ThreadXCcRTOSJjThreadXJjCore\:true;USBXCcUSBJjUSBXJjUXOoDeviceOoCoreStack\:true;USBXCcUSBJjUSBXJjUXOoDeviceOoClassOoCDCOoACM\:true;

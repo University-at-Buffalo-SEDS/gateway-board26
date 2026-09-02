@@ -6,6 +6,20 @@ import build
 
 
 class QualificationContractTests(unittest.TestCase):
+    def test_gateway_telemetry_stack_has_profiled_headroom(self):
+        root = Path(build.__file__).resolve().parent
+        thread = (root / "Core" / "Src" / "telemetry_thread.c").read_text(
+            encoding="utf-8"
+        )
+        config = (
+            root / "AZURE_RTOS" / "App" / "app_azure_rtos_config.h"
+        ).read_text(encoding="utf-8")
+        ioc = (root / "gateway_board.ioc").read_text(encoding="utf-8")
+        self.assertIn("TELEMETRY_THREAD_STACK_SIZE (13U * 1024U)", thread)
+        self.assertIn("TX_APP_MEM_POOL_SIZE                     62288", config)
+        self.assertIn("TX_APP_MEM_POOL_SIZE=62288", ioc)
+        self.assertIn("UX_DEVICE_APP_MEM_POOL_SIZE=20904", ioc)
+
     def test_gateway_transports_v4_topology_packets_and_recovers_can(self):
         root = Path(build.__file__).resolve().parent
         uart_h = (root / "Core" / "Inc" / "telemetry_uart.h").read_text(
