@@ -37,11 +37,15 @@ endif()
 
 # Create an executable object type
 add_executable(${CMAKE_PROJECT_NAME})
+target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
+    USER_VECT_TAB_ADDRESS VECT_TAB_OFFSET=0x00004200U)
 target_link_options(${CMAKE_PROJECT_NAME} PRIVATE
     -T "${CMAKE_SOURCE_DIR}/STM32G491XX_FLASH.ld")
 
 # Add STM32CubeMX generated sources
 add_subdirectory(cmake/stm32cubemx)
+target_compile_definitions(STM32_Drivers PRIVATE
+    USER_VECT_TAB_ADDRESS VECT_TAB_OFFSET=0x00004200U)
 
 # Link directories setup
 target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE

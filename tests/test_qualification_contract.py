@@ -34,7 +34,13 @@ class QualificationContractTests(unittest.TestCase):
         self.assertIn('"bay"', runner)
         self.assertIn('"tx_probe": "fdcan_tx_ok"', runner)
         self.assertIn('"rx_probe": "fdcan_rx"', runner)
-        self.assertIn('"ground_radio_pico_path"', runner)
+        self.assertIn('"host_nodes"', runner)
+        self.assertIn('"groundstation"', runner)
+        self.assertIn('"rocket_radio"', runner)
+        self.assertIn('"fill_pico"', runner)
+        self.assertIn('"GS_SIM_VALIDATE_VALVE_ROUNDTRIP": "1"', runner)
+        self.assertIn('"probe": "valve_commands_received", "minimum": 1', runner)
+        self.assertIn("forwarded status ACK to GroundStation", runner)
         self.assertIn('simulation_env["SEDS_FIRMWARE_SIM_TEST"] = "1"', runner)
         self.assertIn('run_live(command, "firmware simulation")', runner)
         self.assertIn('running ({int(now - started)}s elapsed)', runner)
@@ -67,6 +73,33 @@ class QualificationContractTests(unittest.TestCase):
         cmake = (root / "CMakeLists.txt").read_text(encoding="utf-8")
         self.assertIn('seds_router_add_side_packed(r, "can", 3U, tx_send, NULL, false)', telemetry)
         self.assertIn('SEDSNET_MAX_QUEUE_BUDGET "8192"', cmake)
+
+    def test_physical_bridge_preserves_the_packed_wire_image(self):
+        root = Path(build.__file__).resolve().parent
+        telemetry = (root / "Core" / "Src" / "telemetry.c").read_text(
+            encoding="utf-8"
+        )
+
+        uart_ingress = telemetry.index("void telemetry_uart_handle_data")
+        uart_ingest = telemetry.index(
+            "seds_router_receive_packed_from_side(", uart_ingress
+        )
+        self.assertGreater(uart_ingest, uart_ingress)
+
+        can_ingress = telemetry.index("static void telemetry_can_rx")
+        local_can_ingest = telemetry.index("rx_asynchronous(data, len);", can_ingress)
+        self.assertGreater(local_can_ingest, can_ingress)
+
+        # Source-side routing preserves the packed reliability envelope while
+        # preventing a frame from being reflected to its ingress transport.
+        bridge = telemetry[uart_ingress: telemetry.index("static uint32_t telemetry_timesync_role")]
+        self.assertNotIn("seds_pkt_pack", bridge)
+        self.assertIn("seds_router_new(Seds_RM_Relay", telemetry)
+        self.assertIn('seds_router_add_side_packed(r, "can"', telemetry)
+        self.assertIn('seds_router_add_side_packed(r, "uart"', telemetry)
+        self.assertNotIn("tx_send(payload, len, NULL)", telemetry)
+        self.assertNotIn("telemetry_uart_tx_send(data, len, NULL)", telemetry)
+        self.assertNotIn("BridgeEchoMarker", telemetry)
 
 
     def test_periodic_health_check_does_not_serialize_topology(self):

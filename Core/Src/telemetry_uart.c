@@ -71,6 +71,7 @@ static TelemetryUartState g_telemetry_uart = {.side_id = -1};
 volatile uint32_t g_gateway_uart_rx_frames = 0U;
 volatile uint32_t g_gateway_uart_tx_frames = 0U;
 volatile uint32_t g_gateway_uart_tx_queue_drops = 0U;
+volatile uint32_t g_sim_uart_umbilical_status_count = 0U;
 
 void telemetry_uart_set_byte_pool(TX_BYTE_POOL *pool) {
   (void)pool;
@@ -471,6 +472,15 @@ static void telemetry_uart_write_frame(uint8_t magic, const uint8_t *payload, si
   (void)HAL_UART_Transmit(g_telemetry_uart.huart, frame, (uint16_t)frame_len, 100U);
   g_telemetry_uart.tx_frame_count++;
   g_gateway_uart_tx_frames++;
+#ifdef SEDS_FIRMWARE_SIM_TEST
+  if ((magic == TELEMETRY_UART_REQ_DATA_MAGIC ||
+       magic == TELEMETRY_UART_RESP_DATA_MAGIC) &&
+      payload != NULL &&
+      sim_probe_packed_data_type(payload, len) ==
+          (uint32_t)SEDS_DT_UMBILICAL_STATUS) {
+    g_sim_uart_umbilical_status_count++;
+  }
+#endif
 }
 
 static UNUSED_FUNCTION uint8_t telemetry_uart_queue_push(const uint8_t *bytes, size_t len) {
@@ -575,7 +585,9 @@ void telemetry_uart_process(void) {
 }
 
 SedsResult telemetry_uart_tx_send(const uint8_t *bytes, size_t len, void *user) {
+#ifdef SEDS_FIRMWARE_SIM_TEST
   extern volatile uint32_t g_sim_uart_egress_peer_mask;
+#endif
   (void)user;
 
   if (bytes == NULL || len == 0U) {

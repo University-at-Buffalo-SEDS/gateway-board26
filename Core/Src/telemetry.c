@@ -67,6 +67,8 @@ static uint64_t g_local_unix_ms = 0ULL;
 
 RouterState g_router = {.r = NULL, .created = 0U, .start_time = 0ULL};
 
+SedsResult tx_send(const uint8_t *bytes, size_t len, void *user);
+
 /* Exported simulator/HIL health signals. A linked-bay test requires both a
  * remote discovery topology change and a valid SEDSNet network clock. */
 volatile uint32_t g_telemetry_discovery_seen = 0U;
@@ -84,6 +86,13 @@ volatile uint32_t g_sim_can_heartbeat_count = 0U;
 volatile uint32_t g_sim_can_heartbeat_unrecognized = 0U;
 volatile uint32_t g_sim_can_last_data_type = 0U;
 volatile uint32_t g_sim_can_last_source_address = 0U;
+volatile uint32_t g_sim_can_umbilical_status_count = 0U;
+volatile uint32_t g_sim_uart_last_data_type = 0U;
+volatile uint32_t g_sim_uart_valve_command_count = 0U;
+volatile uint32_t g_sim_can_valve_command_tx_count = 0U;
+volatile uint32_t g_sim_uart_router_receive_fail = 0U;
+volatile int32_t g_sim_uart_router_last_result = 0;
+volatile uint32_t g_sim_gateway_pilot_open_status = 0U;
 
 static void telemetry_signal_deserialize_failure(void) {
   /* Keep GREEN_LED reserved for UART activity indication during bring-up. */
@@ -131,10 +140,20 @@ void telemetry_uart_handle_data(const uint8_t *payload, size_t len) {
   if (payload == NULL || len == 0U) {
     return;
   }
+#ifdef SEDS_FIRMWARE_SIM_TEST
+  g_sim_uart_last_data_type = sim_probe_packed_data_type(payload, len);
+  if (g_sim_uart_last_data_type == (uint32_t)SEDS_DT_VALVE_COMMAND) {
+    g_sim_uart_valve_command_count++;
+  }
+#endif
   sim_probe_observe_packed(payload, len);
 
   result = seds_pkt_validate_packed(payload, len);
   if (result != SEDS_OK) {
+#ifdef SEDS_FIRMWARE_SIM_TEST
+    g_sim_uart_router_receive_fail++;
+    g_sim_uart_router_last_result = (int32_t)result;
+#endif
     telemetry_uart_note_deserialize_result(0U);
     (void)log_error_asynchronous("UART dropped invalid serialized payload: %d len=%u\r\n",
                                  (int)result, (unsigned)len);
@@ -162,6 +181,9 @@ void telemetry_uart_handle_data(const uint8_t *payload, size_t len) {
     return;
   }
 
+#ifdef SEDS_FIRMWARE_SIM_TEST
+  g_sim_uart_router_last_result = (int32_t)result;
+#endif
   telemetry_uart_note_deserialize_result(1U);
 #endif
 }
@@ -320,6 +342,12 @@ SedsResult tx_send(const uint8_t *bytes, size_t len, void *user) {
   }
   HAL_GPIO_TogglePin(GREEN_LED_GPIO_Port, GREEN_LED_Pin);
 
+#ifdef SEDS_FIRMWARE_SIM_TEST
+  if (sim_probe_packed_data_type(bytes, len) == (uint32_t)SEDS_DT_VALVE_COMMAND) {
+    g_sim_can_valve_command_tx_count++;
+  }
+#endif
+
   const uint32_t can_id =
       sim_probe_packed_data_type(bytes, len) == (uint32_t)SEDS_DT_HEARTBEAT
           ? 0x004U
@@ -346,6 +374,10 @@ static void telemetry_can_rx(const uint8_t *data, size_t len, void *user) {
   g_sim_can_rx_callback_count++;
   g_sim_can_last_data_type = sim_probe_packed_data_type(data, len);
   g_sim_can_last_source_address = sim_probe_packed_source_address(data, len);
+  if (g_sim_can_last_data_type == (uint32_t)SEDS_DT_UMBILICAL_STATUS) {
+    g_sim_can_umbilical_status_count++;
+    g_sim_gateway_pilot_open_status++;
+  }
   if (g_sim_can_last_data_type == (uint32_t)SEDS_DT_HEARTBEAT) {
     const uint32_t bit = sim_probe_peer_bit_packed(data, len);
     g_sim_can_heartbeat_count++;
@@ -355,6 +387,8 @@ static void telemetry_can_rx(const uint8_t *data, size_t len, void *user) {
     }
   }
 #endif
+  /* Tag CAN as the ingress side. Relay mode forwards the original packed wire
+   * image to UART and excludes the source side, preventing bridge echoes. */
   rx_asynchronous(data, len);
 }
 
@@ -533,6 +567,10 @@ SedsResult init_telemetry_router(void) {
   }
 #endif
 
+  /* Gateway is a true two-sided SEDSNet bridge. Each physical receiver passes
+   * its side id to the router, which preserves the packed frame and never
+   * forwards it back to its ingress side. Endpoint reachability is learned by
+   * discovery; the gateway must not advertise remote endpoints as local. */
   r = seds_router_new(Seds_RM_Relay, node_now_since_ms, NULL, NULL, 0U);
   if (!r) {
     printf("Error: failed to create router\r\n");
