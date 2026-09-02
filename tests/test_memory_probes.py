@@ -26,14 +26,16 @@ class MemoryProbeContractTests(unittest.TestCase):
             },
         )
         self.assertIn("g_telemetry_pool_available", probes)
+        self.assertIn("g_telemetry_stack_remaining", probes)
         self.assertIn("g_telemetry_network_ready", probes)
 
         hooks = (root / "Core" / "Src" / "telemetry_hooks.c").read_text()
         telemetry = (root / "Core" / "Src" / "telemetry.c").read_text()
+        telemetry_thread = (root / "Core" / "Src" / "telemetry_thread.c").read_text()
         can_bus = (root / "Core" / "Src" / "can_bus.c").read_text()
         telemetry_uart = (root / "Core" / "Src" / "telemetry_uart.c").read_text()
         for symbol in probes:
-            self.assertIn(symbol, hooks + telemetry + can_bus + telemetry_uart)
+            self.assertIn(symbol, hooks + telemetry + telemetry_thread + can_bus + telemetry_uart)
 
 
 if __name__ == "__main__":
