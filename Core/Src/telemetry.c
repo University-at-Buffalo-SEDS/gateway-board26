@@ -630,20 +630,24 @@ SedsResult init_telemetry_router(void) {
     return SEDS_ERR;
   }
 
-  if (seds_router_set_route(r, g_can_side_id, uart_side_id, true) != SEDS_OK ||
-      seds_router_set_route(r, uart_side_id, g_can_side_id, true) != SEDS_OK ||
-      seds_router_set_source_route_mode(r, -1, Seds_RSM_Fanout) != SEDS_OK ||
-      seds_router_set_source_route_mode(r, g_can_side_id, Seds_RSM_Fanout) != SEDS_OK ||
-      seds_router_set_source_route_mode(r, uart_side_id, Seds_RSM_Fanout) != SEDS_OK ||
-      seds_router_set_typed_route(r, g_can_side_id, SEDS_DT_HEARTBEAT,
-                                  uart_side_id, true) != SEDS_OK ||
-      seds_router_set_typed_route(r, uart_side_id, SEDS_DT_HEARTBEAT,
-                                  g_can_side_id, true) != SEDS_OK) {
-    printf("Error: failed to configure explicit CAN/UART relay routes\r\n");
+  /* Forward compact discovery addresses but keep the optional full topology
+   * graph off every constrained gateway egress. */
+  if (seds_router_set_typed_route(r, -1, SEDS_DT_DISCOVERY_TOPOLOGY,
+                                  g_can_side_id, false) != SEDS_OK ||
+      seds_router_set_typed_route(r, -1, SEDS_DT_DISCOVERY_TOPOLOGY,
+                                  uart_side_id, false) != SEDS_OK
+#ifdef TELEMETRY_BOARD_LINK_UART
+      || seds_router_set_typed_route(r, -1, SEDS_DT_DISCOVERY_TOPOLOGY,
+                                     board_link_side_id, false) != SEDS_OK
+#endif
+  ) {
     seds_router_free(r);
     g_router.r = NULL;
     g_router.created = 0U;
     g_can_side_id = -1;
+#ifdef TELEMETRY_BOARD_LINK_UART
+    g_board_link_side_id = -1;
+#endif
     telemetry_uart_set_side_id(-1);
     return SEDS_ERR;
   }
