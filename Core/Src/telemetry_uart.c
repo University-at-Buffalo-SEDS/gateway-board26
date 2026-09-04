@@ -70,6 +70,11 @@ typedef struct {
 static TelemetryUartState g_telemetry_uart = {.side_id = -1};
 volatile uint32_t g_gateway_uart_rx_frames = 0U;
 volatile uint32_t g_gateway_uart_tx_frames = 0U;
+#ifdef SEDS_FIRMWARE_SIM_TEST
+volatile uint32_t g_sim_uart_rx_irq_bytes = 0U;
+volatile uint32_t g_sim_uart_rx_start_ok = 0U;
+volatile uint32_t g_sim_uart_rx_start_fail = 0U;
+#endif
 volatile uint32_t g_gateway_uart_tx_queue_drops = 0U;
 volatile uint32_t g_sim_uart_umbilical_status_count = 0U;
 
@@ -108,9 +113,26 @@ static HAL_StatusTypeDef telemetry_uart_start_rx_dma(void) {
                             UART_CLEAR_OREF | UART_CLEAR_IDLEF);
 
 #ifdef SEDS_FIRMWARE_SIM_TEST
-  status = HAL_OK;
-  g_telemetry_uart.rx_dma_active = 1U;
-  g_telemetry_uart.rx_dma_start_ok_count++;
+  /* Renode's STM32G4 model does not route USART requests through the
+   * STM32G0DMA model.  Arm a byte-at-a-time interrupt receive in simulation
+   * so the same UART framing/parser path is exercised without pretending a
+   * DMA operation is active when no receiver was registered.  Hardware builds
+   * continue to use ReceiveToIdle DMA below. */
+  status = HAL_UART_Receive_IT(g_telemetry_uart.huart,
+                               g_telemetry_uart.rx_dma_buf, 1U);
+  if (status == HAL_OK) {
+    g_telemetry_uart.rx_dma_active = 1U;
+    g_telemetry_uart.rx_dma_start_ok_count++;
+    g_sim_uart_rx_start_ok++;
+  } else {
+    g_telemetry_uart.rx_dma_active = 0U;
+    g_sim_uart_rx_start_fail++;
+    if (status == HAL_BUSY) {
+      g_telemetry_uart.rx_dma_start_busy_count++;
+    } else {
+      g_telemetry_uart.rx_dma_start_error_count++;
+    }
+  }
 #else
   status = HAL_UARTEx_ReceiveToIdle_DMA(g_telemetry_uart.huart,
                                         g_telemetry_uart.rx_dma_buf,
@@ -683,6 +705,9 @@ void telemetry_uart_handle_rx_event(UART_HandleTypeDef *huart, uint16_t size) {
 
   const HAL_UART_RxEventTypeTypeDef event_type = HAL_UARTEx_GetRxEventType(huart);
   g_telemetry_uart.rx_dma_event_count++;
+#ifdef SEDS_FIRMWARE_SIM_TEST
+  g_sim_uart_rx_irq_bytes++;
+#endif
   g_telemetry_uart.rx_dma_last_size = size;
   g_telemetry_uart.rx_dma_last_event_type = event_type;
   g_telemetry_uart.rx_dma_last_error_code = huart->ErrorCode;
@@ -728,7 +753,10 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
   if (g_telemetry_uart.huart == NULL || huart == NULL ||
       huart->Instance != g_telemetry_uart.huart->Instance) return;
   g_telemetry_uart.rx_dma_event_count++;
-  telemetry_uart_rx_ring_push_isr(g_telemetry_uart.rx_dma_buf, 1U);
+  /* The simulated receiver is byte-interrupt driven. Consume the byte here so
+   * a burst cannot overflow the production DMA-chunk ring between ThreadX
+   * telemetry task iterations. */
+  telemetry_uart_process_rx_byte(g_telemetry_uart.rx_dma_buf[0]);
   g_telemetry_uart.rx_dma_active = 0U;
   if (telemetry_uart_start_rx_dma() != HAL_OK) {
     g_telemetry_uart.rx_restart_error_count++;
