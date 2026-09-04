@@ -63,6 +63,9 @@ static int32_t g_can_side_id = -1;
 #ifdef TELEMETRY_BOARD_LINK_UART
 static int32_t g_board_link_side_id = -1;
 #endif
+
+#define GATEWAY_UART_MAX_FRAME_BYTES TELEMETRY_UART_MAX_PAYLOAD
+#define GATEWAY_SIDE_TRANSPORT_TEMPLATES 4U
 static uint8_t g_local_unix_valid = 0U;
 static uint64_t g_local_unix_ms = 0ULL;
 
@@ -596,7 +599,10 @@ SedsResult init_telemetry_router(void) {
    * packed SEDSNet side symmetric with RF's radio side; enabling hop ACKs on
    * only this endpoint leaves every frame awaiting an ACK that RF never emits
    * and exhausts the Gateway pool. */
-  uart_side_id = seds_router_add_side_packed(r, "uart", 4U, telemetry_uart_tx_send, NULL, false);
+  uart_side_id = seds_router_add_side_packed_profile(
+      r, "uart", 4U, telemetry_uart_tx_send, NULL, false,
+      SEDS_SIDE_TRANSPORT_PROFILE_IPV6_LIKE, GATEWAY_UART_MAX_FRAME_BYTES,
+      0U, GATEWAY_SIDE_TRANSPORT_TEMPLATES);
   telemetry_uart_set_side_id(uart_side_id);
   if (uart_side_id < 0) {
     printf("Error: failed to add UART side: %ld\r\n", (long)uart_side_id);

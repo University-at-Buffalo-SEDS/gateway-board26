@@ -104,13 +104,17 @@ class QualificationContractTests(unittest.TestCase):
         local_can_ingest = telemetry.index("rx_asynchronous(data, len);", can_ingress)
         self.assertGreater(local_can_ingest, can_ingress)
 
-        # Source-side routing preserves the packed reliability envelope while
-        # preventing a frame from being reflected to its ingress transport.
+        # SEDSNet owns route selection and preserves the packed reliability
+        # envelope. The UART side advertises its real frame limit so SEDSNet
+        # chunks large discovery/application packets instead of the driver
+        # truncating or manually forwarding them.
         bridge = telemetry[uart_ingress: telemetry.index("static uint32_t telemetry_timesync_role")]
         self.assertNotIn("seds_pkt_pack", bridge)
         self.assertIn("seds_router_new(Seds_RM_Relay", telemetry)
         self.assertIn('seds_router_add_side_packed(r, "can"', telemetry)
-        self.assertIn('seds_router_add_side_packed(r, "uart"', telemetry)
+        self.assertIn('seds_router_add_side_packed_profile(\n      r, "uart"', telemetry)
+        self.assertIn("GATEWAY_UART_MAX_FRAME_BYTES", telemetry)
+        self.assertIn("SEDS_SIDE_TRANSPORT_PROFILE_IPV6_LIKE", telemetry)
         self.assertNotIn("tx_send(payload, len, NULL)", telemetry)
         self.assertNotIn("telemetry_uart_tx_send(data, len, NULL)", telemetry)
         self.assertNotIn("BridgeEchoMarker", telemetry)
