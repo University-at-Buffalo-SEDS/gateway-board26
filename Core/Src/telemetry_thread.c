@@ -76,7 +76,14 @@ void telemetry_thread_entry(ULONG initial_input)
 #endif
         (void)telemetry_poll_timesync();
         sample_telemetry_stack();
+#ifdef SEDS_FIRMWARE_SIM_TEST
+        /* Renode's G491 USART model lacks the board's DMA receive behavior.
+         * Service its single-byte RDR shim continuously while still yielding
+         * to every other ThreadX thread. */
+        tx_thread_relinquish();
+#else
         tx_thread_sleep(TELEMETRY_THREAD_SLEEP_TICKS);
+#endif
     }
 }
 

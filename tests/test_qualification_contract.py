@@ -33,6 +33,9 @@ class QualificationContractTests(unittest.TestCase):
         self.assertIn("#define TELEMETRY_UART_MAX_PAYLOAD 1024U", uart_h)
         self.assertIn("#define TELEMETRY_UART_QUEUE_DEPTH 8U", uart_c)
         self.assertIn("#define TELEMETRY_UART_RX_RING_DEPTH 8U", uart_c)
+        self.assertNotIn("HAL_UART_Receive_IT", uart_c)
+        self.assertIn("READ_REG(g_telemetry_uart.huart->Instance->RDR)", uart_c)
+        self.assertNotIn("UART_RXDATA_FLUSH_REQUEST", uart_c)
         self.assertIn("can_bus_recover_if_bus_off", can)
         self.assertIn("can_bus_wait_for_tx_slot", can)
         self.assertIn("HAL_FDCAN_AbortTxRequest", can)
@@ -118,6 +121,15 @@ class QualificationContractTests(unittest.TestCase):
         self.assertNotIn("tx_send(payload, len, NULL)", telemetry)
         self.assertNotIn("telemetry_uart_tx_send(data, len, NULL)", telemetry)
         self.assertNotIn("BridgeEchoMarker", telemetry)
+
+    def test_gateway_uart_accepts_profiled_sedsnet_transport_envelopes(self):
+        root = Path(build.__file__).resolve().parent
+        uart = (root / "Core" / "Src" / "telemetry_uart.c").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("is_sedsnet_side_transport", uart)
+        self.assertIn("payload[0] == (uint8_t)'S'", uart)
+        self.assertIn("is_sedsnet_side_transport == 0U", uart)
 
 
     def test_periodic_health_check_does_not_serialize_topology(self):

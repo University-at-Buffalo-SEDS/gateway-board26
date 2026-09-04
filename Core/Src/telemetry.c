@@ -65,7 +65,12 @@ static int32_t g_board_link_side_id = -1;
 #endif
 
 #define GATEWAY_UART_MAX_FRAME_BYTES TELEMETRY_UART_MAX_PAYLOAD
-#define GATEWAY_SIDE_TRANSPORT_TEMPLATES 4U
+/* GroundStation currently uses eight distinct packed header templates during
+ * discovery, managed-variable sync, and command traffic. Keeping only four
+ * makes the Gateway evict an early full template and silently discard the
+ * later compact command that refers to it. Leave headroom without using the
+ * hosted default of 64 on this memory-constrained MCU. */
+#define GATEWAY_SIDE_TRANSPORT_TEMPLATES 16U
 static uint8_t g_local_unix_valid = 0U;
 static uint64_t g_local_unix_ms = 0ULL;
 
@@ -152,7 +157,13 @@ void telemetry_uart_handle_data(const uint8_t *payload, size_t len) {
 #endif
   sim_probe_observe_packed(payload, len);
 
-  result = seds_pkt_validate_packed(payload, len);
+  /* Packed sides may carry SEDSNet's SDT full/compact transport wrapper. It
+   * is intentionally not a canonical packet, so validating it with the raw
+   * packet validator rejects every valid Pico-Fi frame. Let the side-aware
+   * router decode and validate its own transport envelope. */
+  if (telemetry_uart_side_id() < 0) {
+    result = seds_pkt_validate_packed(payload, len);
+  }
   if (result != SEDS_OK) {
 #ifdef SEDS_FIRMWARE_SIM_TEST
     g_sim_uart_router_receive_fail++;

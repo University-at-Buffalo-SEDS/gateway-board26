@@ -73,7 +73,7 @@ volatile uint32_t g_gateway_uart_tx_frames = 0U;
 #ifdef SEDS_FIRMWARE_SIM_TEST
 volatile uint32_t g_sim_uart_rx_irq_bytes = 0U;
 volatile uint32_t g_sim_uart_rx_start_ok = 0U;
-volatile uint32_t g_sim_uart_rx_start_fail = 0U;
+volatile uint32_t g_sim_uart_rx_start_fail __attribute__((used)) = 0U;
 #endif
 volatile uint32_t g_gateway_uart_tx_queue_drops = 0U;
 volatile uint32_t g_sim_uart_umbilical_status_count = 0U;
@@ -105,6 +105,9 @@ static HAL_StatusTypeDef telemetry_uart_start_rx_dma(void) {
   HAL_StatusTypeDef status;
 
   if (g_telemetry_uart.huart == NULL) {
+#ifdef SEDS_FIRMWARE_SIM_TEST
+    g_sim_uart_rx_start_fail++;
+#endif
     return HAL_ERROR;
   }
 
@@ -113,26 +116,13 @@ static HAL_StatusTypeDef telemetry_uart_start_rx_dma(void) {
                             UART_CLEAR_OREF | UART_CLEAR_IDLEF);
 
 #ifdef SEDS_FIRMWARE_SIM_TEST
-  /* Renode's STM32G4 model does not route USART requests through the
-   * STM32G0DMA model.  Arm a byte-at-a-time interrupt receive in simulation
-   * so the same UART framing/parser path is exercised without pretending a
-   * DMA operation is active when no receiver was registered.  Hardware builds
-   * continue to use ReceiveToIdle DMA below. */
-  status = HAL_UART_Receive_IT(g_telemetry_uart.huart,
-                               g_telemetry_uart.rx_dma_buf, 1U);
-  if (status == HAL_OK) {
-    g_telemetry_uart.rx_dma_active = 1U;
-    g_telemetry_uart.rx_dma_start_ok_count++;
-    g_sim_uart_rx_start_ok++;
-  } else {
-    g_telemetry_uart.rx_dma_active = 0U;
-    g_sim_uart_rx_start_fail++;
-    if (status == HAL_BUSY) {
-      g_telemetry_uart.rx_dma_start_busy_count++;
-    } else {
-      g_telemetry_uart.rx_dma_start_error_count++;
-    }
-  }
+  /* Renode's G491 USART model does not implement the STM32G4 DMA/interrupt
+   * receive contract. The simulation service loop drains its modeled RDR;
+   * hardware builds continue to use ReceiveToIdle DMA below. */
+  status = HAL_OK;
+  g_telemetry_uart.rx_dma_active = 1U;
+  g_telemetry_uart.rx_dma_start_ok_count++;
+  g_sim_uart_rx_start_ok++;
 #else
   status = HAL_UARTEx_ReceiveToIdle_DMA(g_telemetry_uart.huart,
                                         g_telemetry_uart.rx_dma_buf,
@@ -403,11 +393,18 @@ static void telemetry_uart_nested_rx_push_byte(uint8_t byte) {
 
 static void telemetry_uart_dispatch_data_payload(const uint8_t *payload, size_t payload_len) {
   size_t idx;
+  const uint8_t is_sedsnet_side_transport =
+      (payload_len >= 3U && payload[0] == (uint8_t)'S' &&
+       payload[1] == (uint8_t)'D' && payload[2] == (uint8_t)'T');
 
   if (g_telemetry_uart.nested_fill == 0U &&
       g_telemetry_uart.nested_discard_remaining == 0U &&
       (payload_len < 2U || !telemetry_uart_is_valid_header(payload[0], payload[1]))) {
-    if (seds_pkt_validate_packed(payload, payload_len) != SEDS_OK) {
+    /* A profiled SEDSNet side sends SDT full/compact envelopes, not canonical
+     * packets.  Pass those envelopes to the side-aware router decoder; only
+     * apply canonical validation to the legacy unprofiled payload form. */
+    if (is_sedsnet_side_transport == 0U &&
+        seds_pkt_validate_packed(payload, payload_len) != SEDS_OK) {
       telemetry_uart_signal_parse_failure();
       return;
     }
@@ -588,7 +585,8 @@ void telemetry_uart_process(void) {
 
 #ifdef SEDS_FIRMWARE_SIM_TEST
   while (__HAL_UART_GET_FLAG(g_telemetry_uart.huart, UART_FLAG_RXNE) != RESET) {
-    const uint8_t byte = (uint8_t)g_telemetry_uart.huart->Instance->RDR;
+    const uint8_t byte = (uint8_t)READ_REG(g_telemetry_uart.huart->Instance->RDR);
+    g_sim_uart_rx_irq_bytes++;
     telemetry_uart_process_rx_byte(byte);
   }
 #endif
@@ -747,22 +745,6 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size) {
   board_link_uart_handle_rx_event(huart, Size);
 #endif
 }
-
-#ifdef SEDS_FIRMWARE_SIM_TEST
-void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
-  if (g_telemetry_uart.huart == NULL || huart == NULL ||
-      huart->Instance != g_telemetry_uart.huart->Instance) return;
-  g_telemetry_uart.rx_dma_event_count++;
-  /* The simulated receiver is byte-interrupt driven. Consume the byte here so
-   * a burst cannot overflow the production DMA-chunk ring between ThreadX
-   * telemetry task iterations. */
-  telemetry_uart_process_rx_byte(g_telemetry_uart.rx_dma_buf[0]);
-  g_telemetry_uart.rx_dma_active = 0U;
-  if (telemetry_uart_start_rx_dma() != HAL_OK) {
-    g_telemetry_uart.rx_restart_error_count++;
-  }
-}
-#endif
 
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart) {
   telemetry_uart_handle_error(huart);

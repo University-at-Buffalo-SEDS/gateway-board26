@@ -65,9 +65,17 @@ static inline uint32_t sim_probe_sender_address(const char *sender) {
 
 static inline uint32_t sim_probe_packed_data_type(const uint8_t *data,
                                                   size_t len) {
-  size_t offset = 2U;
+  size_t offset = 0U;
   uint64_t data_type = 0U;
-  if (data != NULL && len >= 3U &&
+  if (data == NULL) return UINT32_MAX;
+  if (len >= 5U && data[0] == 'S' && data[1] == 'D' && data[2] == 'T') {
+    if (data[3] != 1U) return UINT32_MAX;
+    offset = 4U;
+    if (!sim_probe_read_uleb(data, len, &offset, &data_type)) return UINT32_MAX;
+  }
+  if (len < offset + 3U) return UINT32_MAX;
+  offset += 2U;
+  if (
       sim_probe_read_uleb(data, len, &offset, &data_type) &&
       data_type <= UINT32_MAX) {
     return (uint32_t)data_type;
