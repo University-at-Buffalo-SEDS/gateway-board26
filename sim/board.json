@@ -76,6 +76,7 @@
       {"name": "gateway_pilot_open_status", "symbol": "g_sim_gateway_pilot_open_status"},
       {"name": "uart_tx_frames", "symbol": "g_gateway_uart_tx_frames"},
       {"name": "uart_umbilical_status_count", "symbol": "g_sim_uart_umbilical_status_count"},
+      {"name": "uart_umbilical_status_tx_count", "symbol": "g_sim_uart_umbilical_status_tx_count"},
       {"name": "uart_tx_queue_drops", "symbol": "g_gateway_uart_tx_queue_drops", "maximum": 0},
       {"name": "pool_available", "symbol": "g_telemetry_pool_available", "max_end_drop": 2048},
       {"name": "telemetry_stack_remaining", "symbol": "g_telemetry_stack_remaining", "minimum": 2048},

@@ -77,6 +77,9 @@ volatile uint32_t g_sim_uart_rx_start_fail __attribute__((used)) = 0U;
 #endif
 volatile uint32_t g_gateway_uart_tx_queue_drops = 0U;
 volatile uint32_t g_sim_uart_umbilical_status_count = 0U;
+#ifdef SEDS_FIRMWARE_SIM_TEST
+volatile uint32_t g_sim_uart_umbilical_status_tx_count = 0U;
+#endif
 
 void telemetry_uart_set_byte_pool(TX_BYTE_POOL *pool) {
   (void)pool;
@@ -616,6 +619,10 @@ SedsResult telemetry_uart_tx_send(const uint8_t *bytes, size_t len, void *user) 
 
 #ifdef SEDS_FIRMWARE_SIM_TEST
   g_sim_uart_egress_peer_mask |= sim_probe_peer_bit_packed(bytes, len);
+  if (sim_probe_packed_data_type(bytes, len) ==
+      (uint32_t)SEDS_DT_UMBILICAL_STATUS) {
+    g_sim_uart_umbilical_status_tx_count++;
+  }
 #endif
 
   return telemetry_uart_queue_push(bytes, len) ? SEDS_OK : SEDS_IO;
