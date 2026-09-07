@@ -20,6 +20,15 @@ class QualificationContractTests(unittest.TestCase):
         self.assertIn("TX_APP_MEM_POOL_SIZE=62288", ioc)
         self.assertIn("UX_DEVICE_APP_MEM_POOL_SIZE=20904", ioc)
 
+        layout = json.loads((root / "sim" / "board.json").read_text(encoding="utf-8"))
+        probes = {
+            probe["name"]: probe
+            for probe in layout["execution"]["memory_probes"]
+        }
+        # The linked full-system profile has a stable 1,984-byte low-water mark.
+        # Guard below that observed value while retaining 1.5 KiB of headroom.
+        self.assertEqual(probes["telemetry_stack_remaining"]["minimum"], 1536)
+
     def test_gateway_transports_v4_topology_packets_and_recovers_can(self):
         root = Path(build.__file__).resolve().parent
         uart_h = (root / "Core" / "Inc" / "telemetry_uart.h").read_text(
