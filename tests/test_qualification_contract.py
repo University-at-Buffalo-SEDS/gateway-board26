@@ -116,6 +116,7 @@ class QualificationContractTests(unittest.TestCase):
         self.assertIn("seds_router_new(Seds_RM_Relay", telemetry)
         self.assertIn('seds_router_add_side_packed(r, "can"', telemetry)
         self.assertIn('seds_router_add_side_packed_profile(\n      r, "uart"', telemetry)
+        self.assertIn('r, "uart", 4U, telemetry_uart_tx_send, NULL, true,', telemetry)
         self.assertIn("GATEWAY_UART_MAX_FRAME_BYTES", telemetry)
         self.assertIn("SEDS_SIDE_TRANSPORT_PROFILE_IPV6_LIKE", telemetry)
         self.assertNotIn("tx_send(payload, len, NULL)", telemetry)

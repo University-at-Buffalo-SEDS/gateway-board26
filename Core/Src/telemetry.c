@@ -606,12 +606,11 @@ SedsResult init_telemetry_router(void) {
     g_can_side_id = -1;
   }
 
-  /* The Pico-Fi/GroundStation transport already owns link delivery. Keep the
-   * packed SEDSNet side symmetric with RF's radio side; enabling hop ACKs on
-   * only this endpoint leaves every frame awaiting an ACK that RF never emits
-   * and exhausts the Gateway pool. */
+  /* Pico-Fi owns byte framing, while SEDSNet owns packet delivery. Keep hop
+   * reliability enabled symmetrically with GroundStation so reliable command,
+   * status, and managed-variable frames are ACKed instead of retried forever. */
   uart_side_id = seds_router_add_side_packed_profile(
-      r, "uart", 4U, telemetry_uart_tx_send, NULL, false,
+      r, "uart", 4U, telemetry_uart_tx_send, NULL, true,
       SEDS_SIDE_TRANSPORT_PROFILE_IPV6_LIKE, GATEWAY_UART_MAX_FRAME_BYTES,
       0U, GATEWAY_SIDE_TRANSPORT_TEMPLATES);
   telemetry_uart_set_side_id(uart_side_id);
