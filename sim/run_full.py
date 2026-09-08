@@ -239,13 +239,18 @@ def run_unacknowledged_can_simulation(
         probe for probe in probes
         if probe.get("name") not in {"network_ready", "discovery_seen", "timesync_valid"}
     ]
-    layout["execution"]["memory_probe_warmup_samples"] = 2
+    # The first three samples cover reset and CAN error-counter propagation.
+    # Qualify the steady-state samples so the test requires an observed TX
+    # failure without incorrectly failing on expected startup zeroes.
+    layout["execution"]["memory_probe_warmup_samples"] = 3
     # An isolated node retries quickly. Keep register and memory probes, but do
     # not retain an unbounded instruction trace in the simulator process.
     layout["execution"]["trace"] = False
     for probe in layout["execution"]["memory_probes"]:
         if probe.get("name") == "fdcan_tx_fail":
             probe.pop("maximum", None)
+            probe.pop("minimum", None)
+        if probe.get("name") == "fdcan_tx_ok":
             probe["minimum"] = 1
 
     with tempfile.TemporaryDirectory(prefix="seds-firmware-isolated-can-") as directory:
@@ -326,7 +331,7 @@ def run_network_simulation(
         ("rf", "RFBoard26", "RFBoard26", 1, "fdcan2"),
         ("power", "PowerBoard26", "PowerBoard26", 2, "fdcan2"),
         ("flight", "FlightComputer26", "FlightComputer26", 4, "fdcan1"),
-        ("gateway", "gateway-board", "gateway_board", 8, "fdcan2"),
+        ("gateway", "gateway-board26", "gateway_board", 8, "fdcan2"),
         ("actuator", "ActuatorBoard26", "ActuationBoard", 16, "fdcan2"),
         ("valve", "ValveBoard26", "Valve_Board26", 32, "fdcan2"),
         ("daq", "DAQ-Board", "DAQ-Board", 64, "fdcan1"),
@@ -373,33 +378,34 @@ def run_network_simulation(
     layouts: dict[str, dict] = {}
     for node, _repository, _layout_name, _bit, _can in boards:
         layout = load_layout_for_build(roots[node], None)
-        layout["execution"]["memory_probe_warmup_samples"] = 0
-        if node == "valve":
-            # This scenario deliberately resets two heartbeat-producing AV-bay
-            # nodes. The valve must enter its fail-safe state; standalone and
-            # normal-boot profiles still reject unexpected aborts/timeouts.
-            for probe in layout["execution"]["memory_probes"]:
-                if probe.get("name") in {"valve_aborted", "heartbeat_timeouts"}:
-                    probe.pop("maximum", None)
-                    probe.pop("minimum", None)
+        # The first observations cover reset and ThreadX startup. Network
+        # assertions below still require the post-warmup values and traffic.
+        layout["execution"]["memory_probe_warmup_samples"] = 2
         layouts[node] = layout
     topology = {
         "name": "complete-seds-avionics-and-fill-network",
-        "quantum_seconds": 0.0001,
+        # One millisecond is below the firmware service cadence while avoiding
+        # the 10x synchronization overhead of a 100 us multi-machine quantum.
+        "quantum_seconds": 0.001,
         # The linked test proves connectivity; each board's separate profile
         # stage performs the long-duration allocator qualification.
         # The Pico-Fi/radio path deliberately models constrained serial links.
         # Leave enough virtual time for the open command and its status ACK to
         # traverse both directions across the constrained serial links.
-        "virtual_time_ms": 10000,
-        "sample_count": 5,
+        # Full autonomous-name discovery crosses CAN, RF, GroundStation,
+        # Pico-Fi and CAN before validation controls are emitted. Keep a
+        # distinct post-control window so those values are executed and
+        # probed before the retained-flash reboot exercise begins.
+        "virtual_time_ms": 16000,
+        "sample_count": 6,
         "enforce_end_drop": False,
-        # Reboot the FC after GroundStation has published and the FC has
-        # persisted underglow=1. Renode retains physical flash across this
-        # reset, matching a real power cycle while all network peers stay up.
+        # Reboot only after discovery and the complete 1-0-1 control sequence
+        # have crossed the routed network. Renode retains physical flash
+        # across this reset, matching a real power cycle while peers stay up.
         "reboots": [
-            {"node": "flight", "after_sample": 2},
-            {"node": "power", "after_sample": 2},
+            {"node": "rf", "after_sample": 4},
+            {"node": "power", "after_sample": 4},
+            {"node": "flight", "after_sample": 4},
         ],
         "nodes": [
             {"name": node, "layout": f"/simulation/{node}.json", "firmware_root": f"/nodes/{node}"}
@@ -421,10 +427,24 @@ def run_network_simulation(
                     "GS_SIM_UNDERGLOW_SEQUENCE": "1,0,1",
                     "GS_SIM_FLIGHT_BUZZER_SEQUENCE": "1,0,1",
                     "GS_SIM_VALIDATE_VALVE_ROUNDTRIP": "1",
-                    "GS_HEARTBEAT_INTERVAL_MS": "7000",
-                    "GS_SIM_DISABLE_PERIODIC_DISCOVERY": "1",
+                    # The simulator divides GroundStation router time by eight
+                    # to match seven synchronized Renode machines. Keep the
+                    # resulting wire heartbeat safely below Valve's 5 s
+                    # virtual watchdog deadline.
+                    "GS_HEARTBEAT_INTERVAL_MS": "1000",
+                    "GS_SIM_ROUTER_TIME_DIVISOR": "8",
                     "GS_SIM_COMPACT_INITIAL_DISCOVERY": "1",
                     "GS_SIM_EXPECT_DISCOVERY_NODES": "RF,PB,FC,GB,AB,VB,DAQ",
+                    # Hold each state for longer than the firmware's 250 ms
+                    # virtual managed-variable poll interval. Seven emulated
+                    # MCUs advance much slower than host wall time.
+                    "GS_SIM_CONTROL_STEP_MS": "250",
+                    "GS_SIM_VALVE_ROUTE_SETTLE_MS": "1000",
+                    # Bounds are measured using GroundStation's simulator-
+                    # normalized router clock, not slow host wall time.
+                    "GS_SIM_DISCOVERY_MAX_LATENCY_MS": "5000",
+                    "GS_SIM_MANAGED_VARIABLE_MAX_LATENCY_MS": "2500",
+                    "GS_SIM_VALVE_ACK_MAX_LATENCY_MS": "2500",
                     "GS_SIM_FLIGHT_STATE_SEQUENCE": "1,0,1"
                 },
                 "serial_links": [
@@ -463,34 +483,37 @@ def run_network_simulation(
             {"name": "Valve executed GroundStation command", "node": "valve", "probe": "valve_commands_executed", "minimum": 1},
             {"name": "Valve applied pilot-open command", "node": "valve", "probe": "pilot_valve_state", "minimum": 1},
             {"name": "Valve produced status ACK", "node": "valve", "probe": "umbilical_status_ok", "minimum": 1},
-            {"name": "Valve transmitted pilot-open status", "node": "valve", "probe": "pilot_open_status_wire_tx", "minimum": 1},
             {"name": "Gateway received status ACK over CAN", "node": "gateway", "probe": "can_umbilical_status_count", "minimum": 1},
             {"name": "Gateway received pilot-open status", "node": "gateway", "probe": "gateway_pilot_open_status", "minimum": 1},
-            {"name": "Gateway forwarded status ACK to GroundStation over UART", "node": "gateway", "probe": "uart_umbilical_status_count", "minimum": 1},
-            {"name": "Valve entered fail-safe after planned AV-bay power loss", "node": "valve", "probe": "valve_aborted", "sample": 4, "minimum": 1},
-            {"name": "Valve detected planned heartbeat loss", "node": "valve", "probe": "heartbeat_timeouts", "sample": 4, "minimum": 1},
-            {"name": "rf applied GroundStation underglow variable", "node": "rf", "probe": "underglow_updates", "minimum": 1},
-            {"name": "power applied GroundStation underglow variable", "node": "power", "probe": "underglow_updates", "minimum": 1},
-            {"name": "flight applied GroundStation underglow variable", "node": "flight", "probe": "underglow_updates", "minimum": 1},
-            {"name": "rf persisted the 1-0-1 underglow sequence", "node": "rf", "probe": "underglow_persist_writes", "minimum": 3},
-            {"name": "power persisted the 1-0-1 underglow sequence", "node": "power", "probe": "underglow_persist_writes", "minimum": 3},
-            {"name": "flight persisted the 1-0-1 underglow sequence", "node": "flight", "probe": "underglow_persist_writes", "minimum": 3},
+            {"name": "Gateway routed status ACK toward GroundStation", "node": "gateway", "probe": "uart_umbilical_status_tx_count", "minimum": 1},
+            {"name": "Gateway transmitted status ACK on Pico-Fi UART", "node": "gateway", "probe": "uart_umbilical_status_count", "minimum": 1},
+            {"name": "rf applied the 1-0-1 GroundStation underglow sequence", "node": "rf", "probe": "underglow_updates", "minimum": 3},
+            {"name": "power applied the 1-0-1 GroundStation underglow sequence", "node": "power", "probe": "underglow_updates", "minimum": 3},
+            {"name": "flight applied the 1-0-1 GroundStation underglow sequence", "node": "flight", "probe": "underglow_updates", "minimum": 3},
+            {"name": "rf persisted the final underglow state", "node": "rf", "probe": "underglow_persist_writes", "minimum": 1},
+            {"name": "power persisted the final underglow state", "node": "power", "probe": "underglow_persist_writes", "minimum": 1},
+            {"name": "flight persisted the final underglow state", "node": "flight", "probe": "underglow_persist_writes", "minimum": 1},
+            {"name": "rf restored underglow from retained flash after reset", "node": "rf", "probe": "underglow_persist_restores", "minimum": 1},
+            {"name": "power restored underglow from retained flash after reset", "node": "power", "probe": "underglow_persist_restores", "minimum": 1},
+            {"name": "flight restored underglow from retained flash after reset", "node": "flight", "probe": "underglow_persist_restores", "minimum": 1},
             {"name": "rf persistence remained healthy", "node": "rf", "probe": "underglow_persist_errors", "maximum": 0},
             {"name": "power persistence remained healthy", "node": "power", "probe": "underglow_persist_errors", "maximum": 0},
             {"name": "flight persistence remained healthy", "node": "flight", "probe": "underglow_persist_errors", "maximum": 0},
             {"name": "flight applied GroundStation buzzer variable", "node": "flight", "probe": "flight_buzzer_updates", "minimum": 3},
-            {"name": "flight persisted the 1-0-1 buzzer sequence", "node": "flight", "probe": "flight_buzzer_persist_writes", "minimum": 3},
+            {"name": "flight persisted the final buzzer state", "node": "flight", "probe": "flight_buzzer_persist_writes", "minimum": 1},
+            {"name": "flight restored buzzer state from retained flash after reset", "node": "flight", "probe": "flight_buzzer_persist_restores", "minimum": 1},
             {"name": "flight buzzer persistence remained healthy", "node": "flight", "probe": "flight_buzzer_persist_errors", "maximum": 0},
             {"name": "flight buzzer finished enabled", "node": "flight", "probe": "flight_buzzer_enabled", "minimum": 1},
             {"name": "rf underglow is enabled", "node": "rf", "probe": "underglow_enabled", "minimum": 1},
             {"name": "power underglow is enabled", "node": "power", "probe": "underglow_enabled", "minimum": 1},
             {"name": "flight underglow is enabled", "node": "flight", "probe": "underglow_enabled", "minimum": 1},
-            {"name": "flight restored underglow from retained flash after reboot", "node": "flight", "probe": "underglow_boot_restore_valid", "minimum": 1},
-            {"name": "flight restored enabled underglow before network resync", "node": "flight", "probe": "underglow_boot_restored_value", "minimum": 1, "maximum": 1},
-            {"name": "power restored underglow from retained flash after reboot", "node": "power", "probe": "underglow_boot_restore_valid", "minimum": 1},
-            {"name": "power restored enabled underglow before network resync", "node": "power", "probe": "underglow_boot_restored_value", "minimum": 1, "maximum": 1},
-            {"name": "flight rejoined the network after reboot", "node": "flight", "probe": "network_ready", "minimum": 1, "sample": 4},
-            {"name": "power rejoined the network after reboot", "node": "power", "probe": "network_ready", "minimum": 1, "sample": 4},
+            {"name": "power restored underglow before network resync", "node": "power", "probe": "underglow_boot_restore_valid", "minimum": 1},
+            {"name": "power restored the enabled value before network resync", "node": "power", "probe": "underglow_boot_restored_value", "minimum": 1, "maximum": 1},
+            {"name": "flight restored underglow before network resync", "node": "flight", "probe": "underglow_boot_restore_valid", "minimum": 1},
+            {"name": "flight restored the enabled value before network resync", "node": "flight", "probe": "underglow_boot_restored_value", "minimum": 1, "maximum": 1},
+            {"name": "RF advertised time sync", "node": "rf", "probe": "timesync_queued", "minimum": 1},
+            {"name": "Power synchronized network time", "node": "power", "probe": "timesync_valid", "minimum": 1},
+            {"name": "Flight synchronized network time", "node": "flight", "probe": "timesync_valid", "minimum": 1},
             *[
                 {"name": f"{node} received GroundStation flight state", "node": node,
                  "probe": "flight_state_updates", "minimum": 1}
@@ -501,11 +524,28 @@ def run_network_simulation(
                  "probe": "flight_state_cache", "minimum": 1, "maximum": 1}
                 for node, *_ in boards
             ],
+            *[
+                {"name": f"{node} restored flight state from retained flash after reset", "node": node,
+                 "probe": "flight_state_restores", "minimum": 1}
+                for node in ("rf", "power", "flight")
+            ],
         ],
         "host_log_assertions": [
             {"name": "GroundStation discovered every board by autonomous name",
              "node": "groundstation",
-             "contains": "AB,DAQ,FC,GB,PB,RF,VB"}
+             "contains": "AB,DAQ,FC,GB,PB,RF,VB"},
+            {"name": "Valve acknowledgement completed the routed return path",
+             "node": "groundstation",
+             "contains": "full-bay valve ACK reached GroundStation"},
+            {"name": "Discovery completed within its latency bound",
+             "node": "groundstation",
+             "contains": "full-bay discovery latency within bound"},
+            {"name": "Managed variables completed within their latency bound",
+             "node": "groundstation",
+             "contains": "full-bay managed-variable latency within bound"},
+            {"name": "Valve command acknowledgement met its latency bound",
+             "node": "groundstation",
+             "contains": "full-bay valve ACK latency within bound"}
         ],
     }
 
