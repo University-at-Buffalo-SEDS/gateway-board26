@@ -42,12 +42,15 @@ class OtaBuildScriptTests(unittest.TestCase):
         release = build.make_parser().parse_args(["test", "--all", "--release"])
         debug = build.make_parser().parse_args(["test", "--all"])
         legacy = build.make_parser().parse_args(["test", "--full"])
+        soak = build.make_parser().parse_args(["test", "--all", "--ultra-soak"])
 
         self.assertTrue(release.all_tests)
         self.assertTrue(release.release)
         self.assertTrue(debug.all_tests)
         self.assertFalse(debug.release)
         self.assertTrue(legacy.all_tests)
+        self.assertTrue(soak.all_tests)
+        self.assertTrue(soak.ultra_soak)
 
     def test_simulation_layout_uses_selected_build_directory(self):
         from sim.run_full import load_layout_for_build

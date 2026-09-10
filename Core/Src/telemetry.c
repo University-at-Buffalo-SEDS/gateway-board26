@@ -60,6 +60,8 @@ static uint8_t g_can_rx_subscribed = 0U;
 static uint8_t g_board_link_rx_subscribed = 0U;
 #endif
 static int32_t g_can_side_id = -1;
+#define BOARD_CAN_MAX_FRAME_BYTES 128U
+#define BOARD_SIDE_TRANSPORT_TEMPLATES 4U
 #ifdef TELEMETRY_BOARD_LINK_UART
 static int32_t g_board_link_side_id = -1;
 #endif
@@ -600,7 +602,10 @@ SedsResult init_telemetry_router(void) {
     return SEDS_ERR;
   }
 
-  g_can_side_id = seds_router_add_side_packed(r, "can", 3U, tx_send, NULL, false);
+  g_can_side_id = seds_router_add_side_packed_profile(
+      r, "can", 3U, tx_send, NULL, false,
+      SEDS_SIDE_TRANSPORT_PROFILE_IPV6_LIKE, BOARD_CAN_MAX_FRAME_BYTES, 0U,
+      BOARD_SIDE_TRANSPORT_TEMPLATES);
   if (g_can_side_id < 0) {
     printf("Error: failed to add CAN side: %ld\r\n", (long)g_can_side_id);
     g_can_side_id = -1;

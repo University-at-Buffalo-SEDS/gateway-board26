@@ -46,7 +46,7 @@
 #endif
 
 #ifndef CAN_BUS_TX_ENQUEUE_TIMEOUT_MS
-#define CAN_BUS_TX_ENQUEUE_TIMEOUT_MS 50U
+#define CAN_BUS_TX_ENQUEUE_TIMEOUT_MS 5U
 #endif
 
 // =========================

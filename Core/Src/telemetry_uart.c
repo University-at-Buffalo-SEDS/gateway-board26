@@ -7,7 +7,11 @@
 #include "main.h"
 #include <string.h>
 
-#define TELEMETRY_UART_QUEUE_DEPTH 8U
+/* Six full frames absorb a complete constrained-link burst. SEDSNet retains
+ * reliable packets when this bounded transport queue applies backpressure;
+ * the two removed slots are reassigned to its allocator to preserve a
+ * contiguous block for topology/schema updates during long-running traffic. */
+#define TELEMETRY_UART_QUEUE_DEPTH 6U
 #define TELEMETRY_UART_REQ_DATA_MAGIC 0xA5U
 #define TELEMETRY_UART_REQ_COMMAND_MAGIC 0xA6U
 #define TELEMETRY_UART_RESP_DATA_MAGIC 0x5AU

@@ -6,6 +6,19 @@ import build
 
 
 class QualificationContractTests(unittest.TestCase):
+    def test_gateway_reclaims_oversized_can_reassembly_ram_for_allocator_recovery(self):
+        root = Path(build.__file__).resolve().parent
+        cmake = (root / "CMakeLists.txt").read_text(encoding="utf-8")
+        app = (root / "Core" / "Src" / "app_threadx.c").read_text(encoding="utf-8")
+        hooks = (root / "Core" / "Src" / "telemetry_hooks.c").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("CAN_BUS_REASM_MAX_BYTES=128", cmake)
+        self.assertIn('GATEWAY_SEDSNET_EMERGENCY_POOL_SIZE "2688"', cmake)
+        self.assertIn("sedsnet_emergency_pool_memory", app)
+        self.assertIn("telemetry_set_emergency_byte_pool", app)
+        self.assertIn("g_telemetry_alloc_emergency_recoveries++", hooks)
+
     def test_gateway_telemetry_stack_has_profiled_headroom(self):
         root = Path(build.__file__).resolve().parent
         thread = (root / "Core" / "Src" / "telemetry_thread.c").read_text(
@@ -16,8 +29,8 @@ class QualificationContractTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         ioc = (root / "gateway_board.ioc").read_text(encoding="utf-8")
         self.assertIn("TELEMETRY_THREAD_STACK_SIZE (13U * 1024U)", thread)
-        self.assertIn("TX_APP_MEM_POOL_SIZE                     62288", config)
-        self.assertIn("TX_APP_MEM_POOL_SIZE=62288", ioc)
+        self.assertIn("TX_APP_MEM_POOL_SIZE                     64336", config)
+        self.assertIn("TX_APP_MEM_POOL_SIZE=64336", ioc)
         self.assertIn("UX_DEVICE_APP_MEM_POOL_SIZE=20904", ioc)
 
         layout = json.loads((root / "sim" / "board.json").read_text(encoding="utf-8"))
@@ -40,7 +53,7 @@ class QualificationContractTests(unittest.TestCase):
         can = (root / "Core" / "Src" / "can_bus.c").read_text(encoding="utf-8")
 
         self.assertIn("#define TELEMETRY_UART_MAX_PAYLOAD 1024U", uart_h)
-        self.assertIn("#define TELEMETRY_UART_QUEUE_DEPTH 8U", uart_c)
+        self.assertIn("#define TELEMETRY_UART_QUEUE_DEPTH 6U", uart_c)
         self.assertIn("#define TELEMETRY_UART_RX_RING_DEPTH 8U", uart_c)
         self.assertNotIn("HAL_UART_Receive_IT", uart_c)
         self.assertIn("READ_REG(g_telemetry_uart.huart->Instance->RDR)", uart_c)
@@ -65,6 +78,9 @@ class QualificationContractTests(unittest.TestCase):
         self.assertIn('"rocket_radio"', runner)
         self.assertIn('"fill_pico"', runner)
         self.assertIn('"GS_SIM_VALIDATE_VALVE_ROUNDTRIP": "1"', runner)
+        self.assertIn('"GS_SIM_VALIDATE_SOAK_COMMANDS": "1" if ultra_soak else "0"', runner)
+        self.assertIn("Valve command path remained alive during soak interval", runner)
+        self.assertIn("Every ten-minute soak command returned an acknowledgement", runner)
         self.assertIn('"probe": "valve_commands_received", "minimum": 1', runner)
         self.assertIn("routed status ACK toward GroundStation", runner)
         self.assertIn('simulation_env["SEDS_FIRMWARE_SIM_TEST"] = "1"', runner)
@@ -97,7 +113,13 @@ class QualificationContractTests(unittest.TestCase):
         root = Path(build.__file__).resolve().parent
         telemetry = (root / "Core" / "Src" / "telemetry.c").read_text(encoding="utf-8")
         cmake = (root / "CMakeLists.txt").read_text(encoding="utf-8")
-        self.assertIn('seds_router_add_side_packed(r, "can", 3U, tx_send, NULL, false)', telemetry)
+        self.assertIn("seds_router_add_side_packed_profile(", telemetry)
+        self.assertIn("SEDS_SIDE_TRANSPORT_PROFILE_IPV6_LIKE", telemetry)
+        can_bus = (root / "Core" / "Src" / "can_bus.c").read_text(encoding="utf-8")
+        self.assertIn("can_bus_wait_for_tx_slot", can_bus)
+        self.assertIn("CAN_BUS_TX_ENQUEUE_TIMEOUT_MS 5U", can_bus)
+        self.assertNotIn("< (uint32_t)frag_cnt", can_bus)
+        self.assertIn("BOARD_CAN_MAX_FRAME_BYTES 128U", telemetry)
         self.assertIn('SEDSNET_MAX_QUEUE_BUDGET "8192"', cmake)
 
     def test_physical_bridge_preserves_the_packed_wire_image(self):
@@ -123,7 +145,7 @@ class QualificationContractTests(unittest.TestCase):
         bridge = telemetry[uart_ingress: telemetry.index("static uint32_t telemetry_timesync_role")]
         self.assertNotIn("seds_pkt_pack", bridge)
         self.assertIn("seds_router_new(Seds_RM_Relay", telemetry)
-        self.assertIn('seds_router_add_side_packed(r, "can"', telemetry)
+        self.assertIn('r, "can", 3U, tx_send, NULL, false', telemetry)
         self.assertIn('seds_router_add_side_packed_profile(\n      r, "uart"', telemetry)
         self.assertIn('r, "uart", 4U, telemetry_uart_tx_send, NULL, false,', telemetry)
         self.assertIn("GATEWAY_UART_MAX_FRAME_BYTES", telemetry)

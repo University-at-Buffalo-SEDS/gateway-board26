@@ -6,12 +6,18 @@
 #include "main.h"
 
 static TX_BYTE_POOL *rust_byte_pool_external = NULL;
+static TX_BYTE_POOL *rust_emergency_byte_pool_external = NULL;
 static TX_MUTEX g_telemetry_mutex;
 static UINT g_telemetry_mutex_ready = 0U;
 volatile uint32_t g_telemetry_lock_get_fail = 0U;
 volatile uint32_t g_telemetry_lock_put_fail = 0U;
 volatile uint32_t g_telemetry_alloc_fail = 0U;
 volatile uint32_t g_telemetry_panic_count = 0U;
+volatile uint32_t g_telemetry_panic_len = 0U;
+volatile uint32_t g_telemetry_panic_word0 = 0U;
+volatile uint32_t g_telemetry_panic_word1 = 0U;
+volatile uint32_t g_telemetry_panic_word2 = 0U;
+volatile uint32_t g_telemetry_panic_word3 = 0U;
 volatile uint32_t g_telemetry_alloc_count = 0U;
 volatile uint32_t g_telemetry_free_count = 0U;
 volatile uint32_t g_telemetry_last_alloc_request = 0U;
@@ -22,6 +28,8 @@ volatile uint32_t g_telemetry_alloc_failure_fragments = 0U;
 volatile ULONG g_telemetry_pool_available = 0U;
 volatile ULONG g_telemetry_pool_low_water = ~0UL;
 volatile ULONG g_telemetry_pool_fragments = 0U;
+volatile ULONG g_telemetry_emergency_pool_available = 0U;
+volatile uint32_t g_telemetry_alloc_emergency_recoveries = 0U;
 static volatile uint8_t g_last_err_memory_hint = 0U;
 static volatile uint8_t g_last_err_mutex_hint = 0U;
 
@@ -97,12 +105,20 @@ static void telemetry_memory_profile_sample(void)
 {
     ULONG available = 0U;
     ULONG fragments = 0U;
+    ULONG emergency_available = 0U;
     if (rust_byte_pool_external != NULL &&
         tx_byte_pool_info_get(rust_byte_pool_external, TX_NULL,
                               &available, &fragments,
                               TX_NULL, TX_NULL, TX_NULL) == TX_SUCCESS)
     {
-        g_telemetry_pool_available = available;
+        if (rust_emergency_byte_pool_external != NULL)
+        {
+            (void)tx_byte_pool_info_get(rust_emergency_byte_pool_external, TX_NULL,
+                                        &emergency_available, TX_NULL,
+                                        TX_NULL, TX_NULL, TX_NULL);
+        }
+        g_telemetry_emergency_pool_available = emergency_available;
+        g_telemetry_pool_available = available + emergency_available;
         g_telemetry_pool_fragments = fragments;
         if (available < g_telemetry_pool_low_water)
         {
@@ -114,6 +130,12 @@ static void telemetry_memory_profile_sample(void)
 void telemetry_set_byte_pool(TX_BYTE_POOL *pool)
 {
     rust_byte_pool_external = pool;
+    telemetry_memory_profile_sample();
+}
+
+void telemetry_set_emergency_byte_pool(TX_BYTE_POOL *pool)
+{
+    rust_emergency_byte_pool_external = pool;
     telemetry_memory_profile_sample();
 }
 
@@ -194,7 +216,17 @@ void *telemetryMalloc(size_t xSize)
      * Allow a brief wait so telemetry bursts don't immediately fail allocator
      * requests and trigger panic paths in Rust.
      */
-    if (tx_byte_allocate(rust_byte_pool_external, &ptr, xSize, 5) != TX_SUCCESS)
+    UINT allocation_status = tx_byte_allocate(rust_byte_pool_external, &ptr, xSize, 5);
+    if (allocation_status != TX_SUCCESS && rust_emergency_byte_pool_external != NULL)
+    {
+        allocation_status = tx_byte_allocate(
+            rust_emergency_byte_pool_external, &ptr, xSize, 5);
+        if (allocation_status == TX_SUCCESS)
+        {
+            g_telemetry_alloc_emergency_recoveries++;
+        }
+    }
+    if (allocation_status != TX_SUCCESS)
     {
         ULONG available = 0U;
         ULONG fragments = 0U;
@@ -240,6 +272,23 @@ void seds_error_msg(const char *str, size_t len)
 void telemetry_panic_hook(const char *str, size_t len)
 {
     g_telemetry_panic_count++;
+    g_telemetry_panic_len = (uint32_t)len;
+    volatile uint32_t *panic_words[] = {
+        &g_telemetry_panic_word0, &g_telemetry_panic_word1,
+        &g_telemetry_panic_word2, &g_telemetry_panic_word3};
+    for (size_t word = 0U; word < 4U; word++)
+    {
+        uint32_t value = 0U;
+        for (size_t byte = 0U; byte < 4U; byte++)
+        {
+            const size_t index = word * 4U + byte;
+            if (str != NULL && index < len)
+            {
+                value |= ((uint32_t)(uint8_t)str[index]) << (byte * 8U);
+            }
+        }
+        *panic_words[word] = value;
+    }
 
     if (str != NULL && len > 0U)
     {

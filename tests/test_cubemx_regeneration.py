@@ -37,6 +37,15 @@ class CubeMxRegenerationContracts(unittest.TestCase):
                 f"CubeMX would regenerate a different {macro}",
             )
 
+    def test_release_build_omits_debug_only_usbx_pool(self):
+        self.assertIn(
+            "FIRMWARE_USB_DEBUG_ENABLED=$<IF:$<CONFIG:Debug>,1,0>", self.cmake
+        )
+        azure = (ROOT / "AZURE_RTOS/App/app_azure_rtos.c").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("#if FIRMWARE_USB_DEBUG_ENABLED", azure)
+
     def test_board_owned_build_reconnects_external_core_libraries(self):
         self.assertRegex(self.cmake.lower(), r"sedsnet")
         self.assertRegex(self.cmake.lower(), r"launchcore")
@@ -44,4 +53,3 @@ class CubeMxRegenerationContracts(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

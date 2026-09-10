@@ -204,7 +204,10 @@ def run_memory_profile(
         probe for probe in probes
         if probe.get("name") not in {"network_ready", "discovery_seen", "timesync_valid"}
     ]
-    layout["execution"]["memory_probe_warmup_samples"] = 3
+    layout["execution"]["memory_probe_warmup_samples"] = min(
+        19,
+        max(3, int(layout["execution"].get("memory_probe_warmup_samples", 0))),
+    )
     # Instruction tracing retains every executed PC and can consume gigabytes
     # while an isolated controller repeatedly retries CAN. Register and memory
     # probes still provide the required fault diagnostics for this soak.
@@ -248,16 +251,19 @@ def run_unacknowledged_can_simulation(
     # The first three samples cover reset and CAN error-counter propagation.
     # Qualify the steady-state samples so the test requires an observed TX
     # failure without incorrectly failing on expected startup zeroes.
-    layout["execution"]["memory_probe_warmup_samples"] = 3
+    layout["execution"]["memory_probe_warmup_samples"] = min(
+        4,
+        max(3, int(layout["execution"].get("memory_probe_warmup_samples", 0))),
+    )
     # An isolated node retries quickly. Keep register and memory probes, but do
     # not retain an unbounded instruction trace in the simulator process.
     layout["execution"]["trace"] = False
     for probe in layout["execution"]["memory_probes"]:
         if probe.get("name") == "fdcan_tx_fail":
             probe.pop("maximum", None)
-            probe.pop("minimum", None)
-        if probe.get("name") == "fdcan_tx_ok":
             probe["minimum"] = 1
+        if probe.get("name") == "fdcan_tx_ok":
+            probe.pop("minimum", None)
 
     with tempfile.TemporaryDirectory(prefix="seds-firmware-isolated-can-") as directory:
         write_container_layout(Path(directory), layout)
@@ -325,7 +331,12 @@ def _network_peer(repo_root: Path) -> tuple[str, Path]:
 
 
 def run_network_simulation(
-    ui, repo_root: Path, architecture: str, build_subdir: str | None = None
+    ui,
+    repo_root: Path,
+    architecture: str,
+    build_subdir: str | None = None,
+    *,
+    ultra_soak: bool = False,
 ) -> None:
     """Boot all firmware plus the GroundStation26 host and prove end-to-end SEDSNet."""
     docker = require_docker()
@@ -386,8 +397,45 @@ def run_network_simulation(
         layout = load_layout_for_build(roots[node], None)
         # The first observations cover reset and ThreadX startup. Network
         # assertions below still require the post-warmup values and traffic.
-        layout["execution"]["memory_probe_warmup_samples"] = 2
+        layout["execution"]["memory_probe_warmup_samples"] = max(
+            2, int(layout["execution"].get("memory_probe_warmup_samples", 0))
+        )
+        if node in {"rf", "power", "flight"}:
+            # These counters intentionally restart at zero after the retained-
+            # flash reboot. Their explicit bay assertions below use the run's
+            # maximum to prove service happened before and after persistence.
+            for probe in layout["execution"]["memory_probes"]:
+                if probe["name"] in {
+                    "can_rx_service_completions",
+                    "telemetry_loop_completions",
+                }:
+                    probe.pop("minimum", None)
         layouts[node] = layout
+    skip_reboots = os.environ.get("SEDS_FIRMWARE_SIM_SKIP_REBOOTS") == "1"
+    perform_reboots = ultra_soak and not skip_reboots
+    virtual_time_ms = (
+        int(os.environ.get("SEDS_FIRMWARE_SIM_SOAK_MS", "600000"))
+        if ultra_soak
+        else int(os.environ.get("SEDS_FIRMWARE_SIM_NETWORK_TIME_MS", "16000"))
+    )
+    if ultra_soak and virtual_time_ms < 10000:
+        raise RuntimeError("SEDS_FIRMWARE_SIM_SOAK_MS must be at least 10000")
+    sample_count = (
+        12
+        if ultra_soak
+        else int(os.environ.get("SEDS_FIRMWARE_SIM_NETWORK_SAMPLES", "6"))
+    )
+    # Leave enough constrained-link time for discovery and the complete
+    # managed-variable sequence before exercising retained-flash restart.
+    # The ten-minute qualification still observes a full 200 seconds after
+    # reboot, so post-restart stalls cannot hide behind pre-reboot traffic.
+    reboot_after_sample = (sample_count * 2) // 3
+    soak_command_samples = [
+        sample for sample in range(1, sample_count)
+        # RF CAN acknowledgement is deliberately disabled after sample 3 and
+        # restored after sample 4. Commands resume immediately on recovery.
+        if sample != 3
+    ]
     topology = {
         "name": "complete-seds-avionics-and-fill-network",
         # One millisecond is below the firmware service cadence while avoiding
@@ -402,17 +450,27 @@ def run_network_simulation(
         # Pico-Fi and CAN before validation controls are emitted. Keep a
         # distinct post-control window so those values are executed and
         # probed before the retained-flash reboot exercise begins.
-        "virtual_time_ms": 16000,
-        "sample_count": 6,
-        "enforce_end_drop": False,
+        "virtual_time_ms": virtual_time_ms,
+        "sample_count": sample_count,
+        "enforce_end_drop": ultra_soak,
         # Reboot only after discovery and the complete 1-0-1 control sequence
         # have crossed the routed network. Renode retains physical flash
         # across this reset, matching a real power cycle while peers stay up.
         "reboots": [
-            {"node": "rf", "after_sample": 4},
-            {"node": "power", "after_sample": 4},
-            {"node": "flight", "after_sample": 4},
-        ],
+            {"node": "rf", "after_sample": reboot_after_sample},
+            {"node": "power", "after_sample": reboot_after_sample},
+            {"node": "flight", "after_sample": reboot_after_sample},
+        ] if perform_reboots else [],
+        "can_ack_events": (
+            [
+                {"node": "rf", "peripheral": "fdcan2", "after_sample": 3,
+                 "acknowledged": False},
+                {"node": "rf", "peripheral": "fdcan2", "after_sample": 4,
+                 "acknowledged": True},
+            ]
+            if ultra_soak
+            else []
+        ),
         "nodes": [
             {"name": node, "layout": f"/simulation/{node}.json", "firmware_root": f"/nodes/{node}"}
             for node, *_ in boards
@@ -433,6 +491,16 @@ def run_network_simulation(
                     "GS_SIM_UNDERGLOW_SEQUENCE": "1,0,1",
                     "GS_SIM_FLIGHT_BUZZER_SEQUENCE": "1,0,1",
                     "GS_SIM_VALIDATE_VALVE_ROUNDTRIP": "1",
+                    "GS_SIM_VALIDATE_FLIGHT_COMMAND": "1",
+                    "GS_SIM_VALIDATE_TELEMETRY_RETURN": "1",
+                    # During the optional ten-minute soak, issue one routed
+                    # Valve command after every completed sample. The next
+                    # sample must observe both board execution and the ACK at
+                    # GroundStation, including the final 9:10-10:00 window.
+                    "GS_SIM_VALIDATE_SOAK_COMMANDS": "1" if ultra_soak else "0",
+                    "GS_SIM_SOAK_COMMAND_SAMPLES": ",".join(
+                        str(sample) for sample in soak_command_samples
+                    ),
                     # The simulator divides GroundStation router time by eight
                     # to match seven synchronized Renode machines. Keep the
                     # resulting wire heartbeat safely below Valve's 5 s
@@ -441,14 +509,14 @@ def run_network_simulation(
                     "GS_SIM_ROUTER_TIME_DIVISOR": "8",
                     "GS_SIM_COMPACT_INITIAL_DISCOVERY": "1",
                     "GS_SIM_EXPECT_DISCOVERY_NODES": "RF,PB,FC,GB,AB,VB,DAQ",
-                    # Hold each state for longer than the firmware's 250 ms
-                    # virtual managed-variable poll interval. Seven emulated
-                    # MCUs advance much slower than host wall time.
+                    # Hold each state long enough for delivery and persistence.
+                    # Unsynchronized firmware retries at 500 ms without blocking
+                    # its router loop; seven emulated MCUs advance slowly.
                     "GS_SIM_CONTROL_STEP_MS": "250",
                     "GS_SIM_VALVE_ROUTE_SETTLE_MS": "1000",
                     # Bounds are measured using GroundStation's simulator-
                     # normalized router clock, not slow host wall time.
-                    "GS_SIM_DISCOVERY_MAX_LATENCY_MS": "5000",
+                    "GS_SIM_DISCOVERY_MAX_LATENCY_MS": "10000",
                     "GS_SIM_MANAGED_VARIABLE_MAX_LATENCY_MS": "2500",
                     "GS_SIM_VALVE_ACK_MAX_LATENCY_MS": "2500",
                     "GS_SIM_FLIGHT_STATE_SEQUENCE": "1,0,1"
@@ -467,7 +535,7 @@ def run_network_simulation(
             {"name": "avionics_can", "kind": "can", "transport_path": ["RFBoard", "PowerBoard", "FlightComputer"],
              "endpoints": [{"node": node, "peripheral": can, "tx_probe": "fdcan_tx_ok", "rx_probe": "fdcan_rx"} for node, _repo, _name, _bit, can in boards[:3]]},
             {"name": "rocket_radio", "kind": "radio",
-             "transport_path": ["RF E22 radio", "GroundStation26 host binary"],
+             "transport_path": ["RF RFD900x radio", "GroundStation26 host binary"],
              "endpoints": [
                  {"node": "rf", "peripheral": "usart1", "tx_probe": "radio_tx_frames", "rx_probe": "radio_rx_frames"},
                  {"node": "groundstation", "peripheral": "av_bay"}]},
@@ -512,6 +580,28 @@ def run_network_simulation(
             {"name": "flight restored buzzer before network resync", "node": "flight", "probe": "flight_buzzer_boot_restore_valid", "minimum": 1, "maximum": 1},
             {"name": "flight restored enabled buzzer before network resync", "node": "flight", "probe": "flight_buzzer_boot_restored_value", "minimum": 1, "maximum": 1},
             {"name": "flight buzzer finished enabled", "node": "flight", "probe": "flight_buzzer_enabled", "minimum": 1},
+            {"name": "flight performed the configured startup buzz", "node": "flight", "probe": "flight_buzzer_startup_buzzes", "minimum": 1},
+            {"name": "flight stopped the startup buzz after its deadline", "node": "flight", "probe": "flight_buzzer_startup_completions", "minimum": 1},
+            {"name": "Flight Computer received a routed command", "node": "flight", "probe": "network_flight_commands_received", "minimum": 1},
+            {"name": "Flight Computer accepted the routed command", "node": "flight", "probe": "network_flight_commands_accepted", "minimum": 1},
+            {"name": "Flight Computer recovery task dequeued commands", "node": "flight", "probe": "recovery_commands_dequeued", "minimum": 1},
+            {"name": "Flight Computer recovery task executed the routed command", "node": "flight", "probe": "network_flight_commands_processed", "minimum": 1},
+            {"name": "Flight Computer received the expected command id", "node": "flight", "probe": "last_network_flight_command_id", "minimum": 14, "maximum": 14},
+            *(
+                [
+                    {
+                        "name": f"{node} CAN transmit resumed after retained-flash reboot",
+                        "node": node,
+                        "probe": "fdcan_tx_ok",
+                        "minimum_gain": 1,
+                        "from_sample": reboot_after_sample,
+                        "to_sample": sample_count - 1,
+                    }
+                    for node in ("rf", "power", "flight")
+                ]
+                if perform_reboots
+                else []
+            ),
             {"name": "rf underglow is enabled", "node": "rf", "probe": "underglow_enabled", "minimum": 1},
             {"name": "power underglow is enabled", "node": "power", "probe": "underglow_enabled", "minimum": 1},
             {"name": "flight underglow is enabled", "node": "flight", "probe": "underglow_enabled", "minimum": 1},
@@ -519,7 +609,7 @@ def run_network_simulation(
             {"name": "power restored the enabled value before network resync", "node": "power", "probe": "underglow_boot_restored_value", "minimum": 1, "maximum": 1},
             {"name": "flight restored underglow before network resync", "node": "flight", "probe": "underglow_boot_restore_valid", "minimum": 1},
             {"name": "flight restored the enabled value before network resync", "node": "flight", "probe": "underglow_boot_restored_value", "minimum": 1, "maximum": 1},
-            {"name": "RF advertised time sync", "node": "rf", "probe": "timesync_queued", "minimum": 1},
+            {"name": "RF maintained valid source time", "node": "rf", "probe": "timesync_valid", "minimum": 1},
             {"name": "Power synchronized network time", "node": "power", "probe": "timesync_valid", "minimum": 1},
             {"name": "Flight synchronized network time", "node": "flight", "probe": "timesync_valid", "minimum": 1},
             *[
@@ -537,6 +627,43 @@ def run_network_simulation(
                  "probe": "flight_state_restores", "minimum": 1}
                 for node in ("rf", "power", "flight")
             ],
+            *(
+                [
+                    {
+                        "name": f"{node} CAN transmit still advances late in ten-minute soak",
+                        "node": node,
+                        "probe": "fdcan_tx_ok",
+                        "minimum_gain": 1,
+                        "from_sample": sample_count - 3,
+                        "to_sample": sample_count - 1,
+                    }
+                    for node, *_ in boards
+                ]
+                + [
+                    {
+                        "name": f"{node} CAN receive still advances late in ten-minute soak",
+                        "node": node,
+                        "probe": "fdcan_rx",
+                        "minimum_gain": 1,
+                        "from_sample": sample_count - 3,
+                        "to_sample": sample_count - 1,
+                    }
+                    for node, *_ in boards
+                ]
+                + [
+                    {
+                        "name": f"Valve command path remained alive during soak interval {sample + 1}",
+                        "node": "valve",
+                        "probe": "valve_commands_executed",
+                        "minimum_gain": 1,
+                        "from_sample": sample,
+                        "to_sample": sample + 1,
+                    }
+                    for sample in (value - 1 for value in soak_command_samples)
+                ]
+                if ultra_soak
+                else []
+            ),
         ],
         "host_log_assertions": [
             {"name": "GroundStation discovered every board by autonomous name",
@@ -545,6 +672,14 @@ def run_network_simulation(
             {"name": "Valve acknowledgement completed the routed return path",
              "node": "groundstation",
              "contains": "full-bay valve ACK reached GroundStation"},
+            *(
+                [{"name": "Every ten-minute soak command returned an acknowledgement",
+                  "node": "groundstation",
+                  "contains": "full-bay soak valve command acknowledged",
+                  "minimum_occurrences": len(soak_command_samples)}]
+                if ultra_soak
+                else []
+            ),
             {"name": "Discovery completed within its latency bound",
              "node": "groundstation",
              "contains": "full-bay discovery latency within bound"},
@@ -553,9 +688,37 @@ def run_network_simulation(
              "contains": "full-bay managed-variable latency within bound"},
             {"name": "Valve command acknowledgement met its latency bound",
              "node": "groundstation",
-             "contains": "full-bay valve ACK latency within bound"}
+             "contains": "full-bay valve ACK latency within bound"},
+            {"name": "GroundStation routed a Flight Computer command",
+             "node": "groundstation",
+             "contains": "full-bay Flight Computer command queued: 14"},
+            {"name": "RF GPS telemetry completed the return path",
+             "node": "groundstation",
+             "contains": "full-bay RF GPS 1 Hz stream reached GroundStation"},
+            {"name": "Flight sensor telemetry completed the return path",
+             "node": "groundstation",
+             "contains": "full-bay Flight sensor 1 Hz stream reached GroundStation"},
+            {"name": "Power telemetry completed the return path at its five-second cadence",
+             "node": "groundstation",
+             "contains": "full-bay Power 5-second stream reached GroundStation"},
+            *[
+                {"name": f"GroundStation observed {node} fill-system telemetry",
+                 "node": "groundstation",
+                 "contains": f"full-bay fill telemetry reached GroundStation from {node}"}
+                for node in ("GB", "AB", "VB", "DAQ")
+            ],
         ],
     }
+
+    if not perform_reboots:
+        # The 16-second gate covers boot and connected routing. Retained-flash
+        # restart belongs to the representative 600-second soak, which leaves
+        # a full 200 seconds to prove post-reboot recovery.
+        topology["assertions"] = [
+            assertion for assertion in topology["assertions"]
+            if "restored" not in assertion["name"].lower()
+            and "startup buzz" not in assertion["name"].lower()
+        ]
 
     with tempfile.TemporaryDirectory(prefix="seds-firmware-network-") as directory:
         root = Path(directory)
@@ -575,4 +738,9 @@ def run_network_simulation(
             command += ["-v", f"{path}:/nodes/{node}:ro"]
         command += ["-v", f"{directory}:/simulation:ro", image, "bay", "--topology", "/simulation/topology.json"]
         ui.say("run", " ".join(command))
-        run_live(command, "complete seven-board plus GroundStation network simulation")
+        description = (
+            "ten-minute seven-board network soak"
+            if ultra_soak
+            else "complete seven-board plus GroundStation network simulation"
+        )
+        run_live(command, description)

@@ -7,7 +7,7 @@ firmware. The gateway driver only transports complete SEDSNet packets. SEDSNet
 discovery and learned subscriptions own routing, so application data is not
 manually fanned out.
 
-CMake fetches SEDSNet v4.0.20 and SEDS LaunchCore v1.0.0 without submodules.
+CMake fetches SEDSNet v4.0.23 and SEDS LaunchCore v1.0.0 without submodules.
 LaunchCore derives linker scripts and the boot/OTA layout from
 `Bootloader/board_config.h`.
 
@@ -19,7 +19,13 @@ LaunchCore derives linker scripts and the boot/OTA layout from
 ./build.py clean
 ./build.py test
 ./build.py test --all --release
+./build.py test --all --release --ultra-soak
 ```
+
+`--ultra-soak` keeps the normal 16-second full-network test first, then adds a
+separate 600,000 ms firmware-time fault/rejoin, command/ACK, and memory-leak
+qualification. Commands must execute and return an ACK throughout the soak,
+including its final interval.
 
 The normal flash workflow writes the complete `.factory.bin` at `0x08000000`.
 Run `./build.py flash --help` for other host programmers. OTA packages use the

@@ -37,6 +37,7 @@
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
 extern void telemetry_set_byte_pool(TX_BYTE_POOL *pool);
+extern void telemetry_set_emergency_byte_pool(TX_BYTE_POOL *pool);
 extern void telemetry_init_lock(void);
 /* USER CODE END PTD */
 
@@ -52,6 +53,8 @@ extern void telemetry_init_lock(void);
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN PV */
+static TX_BYTE_POOL sedsnet_emergency_byte_pool;
+static UCHAR sedsnet_emergency_pool_memory[GATEWAY_SEDSNET_EMERGENCY_POOL_SIZE];
 
 /* USER CODE END PV */
 
@@ -75,6 +78,13 @@ UINT App_ThreadX_Init(VOID *memory_ptr)
 
   /* USER CODE BEGIN App_ThreadX_Init */
   telemetry_set_byte_pool(byte_pool);
+  if (tx_byte_pool_create(&sedsnet_emergency_byte_pool, "SEDSNet emergency",
+                          sedsnet_emergency_pool_memory,
+                          GATEWAY_SEDSNET_EMERGENCY_POOL_SIZE) != TX_SUCCESS)
+  {
+    Error_Handler();
+  }
+  telemetry_set_emergency_byte_pool(&sedsnet_emergency_byte_pool);
   telemetry_uart_set_byte_pool(byte_pool);
 #ifdef TELEMETRY_BOARD_LINK_UART
   board_link_uart_set_byte_pool(byte_pool);

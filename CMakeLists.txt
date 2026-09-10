@@ -38,7 +38,8 @@ endif()
 # Create an executable object type
 add_executable(${CMAKE_PROJECT_NAME})
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
-    USER_VECT_TAB_ADDRESS VECT_TAB_OFFSET=0x00004200U)
+    USER_VECT_TAB_ADDRESS VECT_TAB_OFFSET=0x00004200U
+    FIRMWARE_USB_DEBUG_ENABLED=$<IF:$<CONFIG:Debug>,1,0>)
 target_link_options(${CMAKE_PROJECT_NAME} PRIVATE
     -T "${CMAKE_SOURCE_DIR}/STM32G491XX_FLASH.ld")
 
@@ -77,8 +78,13 @@ target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined symbols
     CAN_BUS_RX_RING_DEPTH=48
     CAN_BUS_REASM_SLOTS=3
-    CAN_BUS_REASM_MAX_BYTES=1024
+    CAN_BUS_REASM_MAX_BYTES=128
 )
+
+set(GATEWAY_SEDSNET_EMERGENCY_POOL_SIZE "2688" CACHE STRING
+    "Reclaimed CAN reassembly RAM reserved for allocator fragmentation recovery" FORCE)
+target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
+    GATEWAY_SEDSNET_EMERGENCY_POOL_SIZE=${GATEWAY_SEDSNET_EMERGENCY_POOL_SIZE})
 
 # Remove wrong libob.a library dependency when using cpp files
 list(REMOVE_ITEM CMAKE_C_IMPLICIT_LINK_LIBRARIES ob)
