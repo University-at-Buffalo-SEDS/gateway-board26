@@ -397,6 +397,7 @@ def configure_and_build(ui: UI, cfg: BuildConfig, target: str | None = None) -> 
 
     telemetry_flag = f"-DENABLE_TELEMETRY={'ON' if cfg.telemetry else 'OFF'}"
     simulator_flag = f"-DSEDS_FIRMWARE_SIM_TEST={'ON' if os.environ.get('SEDS_FIRMWARE_SIM_TEST') == '1' else 'OFF'}"
+    hil_flag = f"-DGATEWAY_HIL_DIAGNOSTICS={'ON' if os.environ.get('GATEWAY_HIL_DIAGNOSTICS') == '1' else 'OFF'}"
 
     run(ui, [
         "cmake",
@@ -407,6 +408,7 @@ def configure_and_build(ui: UI, cfg: BuildConfig, target: str | None = None) -> 
         "-DCMAKE_COMMAND=cmake",
         telemetry_flag,
         simulator_flag,
+        hil_flag,
         "-S", str(cfg.repo_root),
         "-B", str(cfg.build_dir),
         "-G", cfg.generator,

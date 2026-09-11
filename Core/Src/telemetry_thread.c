@@ -27,6 +27,7 @@ TX_THREAD router_test_thread;
 #define TELEMETRY_THREAD_SLEEP_TICKS 1U
 
 volatile uint32_t g_telemetry_stack_remaining = TELEMETRY_THREAD_STACK_SIZE;
+volatile uint32_t g_gateway_telemetry_loop_count = 0U;
 
 static void sample_telemetry_stack(void)
 {
@@ -62,6 +63,7 @@ void telemetry_thread_entry(ULONG initial_input)
 
     for (;;)
     {
+        g_gateway_telemetry_loop_count++;
         michaeal_please_read_my_uart_data_and_decode_it_correctly_and_pass_it_to_the_telemetry_library_thanks_a_bunch_we_love_you_michael;
 #ifdef TELEMETRY_BOARD_LINK_UART
         board_link_uart_process();
@@ -75,6 +77,7 @@ void telemetry_thread_entry(ULONG initial_input)
         board_link_uart_process();
 #endif
         (void)telemetry_poll_timesync();
+        telemetry_hil_capture_requested_snapshot();
         sample_telemetry_stack();
 #ifdef SEDS_FIRMWARE_SIM_TEST
         /* Renode's G491 USART model lacks the board's DMA receive behavior.

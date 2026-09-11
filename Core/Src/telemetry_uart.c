@@ -74,6 +74,11 @@ typedef struct {
 static TelemetryUartState g_telemetry_uart = {.side_id = -1};
 volatile uint32_t g_gateway_uart_rx_frames = 0U;
 volatile uint32_t g_gateway_uart_tx_frames = 0U;
+volatile uint32_t g_gateway_uart_tx_failures = 0U;
+volatile uint32_t g_gateway_uart_rx_dma_events = 0U;
+volatile uint32_t g_gateway_uart_rx_hw_errors = 0U;
+volatile uint32_t g_gateway_uart_rx_restarts_failed = 0U;
+volatile uint32_t g_gateway_uart_rx_ring_drops = 0U;
 #ifdef SEDS_FIRMWARE_SIM_TEST
 volatile uint32_t g_sim_uart_rx_irq_bytes = 0U;
 volatile uint32_t g_sim_uart_rx_start_ok = 0U;
@@ -165,6 +170,7 @@ static void telemetry_uart_rx_ring_push_isr(const uint8_t *data, uint16_t len) {
 
   if (g_telemetry_uart.rx_count >= TELEMETRY_UART_RX_RING_DEPTH) {
     g_telemetry_uart.rx_dma_drop_count++;
+    g_gateway_uart_rx_ring_drops++;
     return;
   }
 
@@ -495,9 +501,17 @@ static void telemetry_uart_write_frame(uint8_t magic, const uint8_t *payload, si
 
   len = telemetry_uart_clamp_payload_len(len);
   frame_len = telemetry_uart_build_frame(frame, magic, payload, len);
-  (void)HAL_UART_Transmit(g_telemetry_uart.huart, frame, (uint16_t)frame_len, 100U);
-  g_telemetry_uart.tx_frame_count++;
-  g_gateway_uart_tx_frames++;
+  const uint32_t baud = g_telemetry_uart.huart->Init.BaudRate;
+  const uint32_t wire_time_ms = (baud != 0U)
+                                    ? (uint32_t)(((frame_len * 10000U) + baud - 1U) / baud)
+                                    : 100U;
+  if (HAL_UART_Transmit(g_telemetry_uart.huart, frame, (uint16_t)frame_len,
+                        wire_time_ms + 50U) == HAL_OK) {
+    g_telemetry_uart.tx_frame_count++;
+    g_gateway_uart_tx_frames++;
+  } else {
+    g_gateway_uart_tx_failures++;
+  }
 #ifdef SEDS_FIRMWARE_SIM_TEST
   if ((magic == TELEMETRY_UART_REQ_DATA_MAGIC ||
        magic == TELEMETRY_UART_RESP_DATA_MAGIC) &&
@@ -525,9 +539,18 @@ static UNUSED_FUNCTION uint8_t telemetry_uart_queue_push(const uint8_t *bytes, s
   primask = telemetry_uart_irq_save();
 
   if (g_telemetry_uart.tx_count >= TELEMETRY_UART_QUEUE_DEPTH) {
-    g_gateway_uart_tx_queue_drops++;
     telemetry_uart_irq_restore(primask);
-    return 0U;
+    /* Apply real transport backpressure in thread context instead of dropping
+     * the discovery/topology frame that teaches GroundStation about boards
+     * behind this bridge. The elapsed UART write also makes the router's
+     * millisecond processing budget effective. */
+    telemetry_uart_reply_next_data_frame();
+    primask = telemetry_uart_irq_save();
+    if (g_telemetry_uart.tx_count >= TELEMETRY_UART_QUEUE_DEPTH) {
+      g_gateway_uart_tx_queue_drops++;
+      telemetry_uart_irq_restore(primask);
+      return 0U;
+    }
   }
 
   slot = g_telemetry_uart.tx_tail;
@@ -568,7 +591,7 @@ static size_t telemetry_uart_queue_pop(uint8_t *out) {
 }
 
 static void telemetry_uart_flush_tx_queue(void) {
-  while (g_telemetry_uart.tx_count != 0U) {
+  if (g_telemetry_uart.tx_count != 0U) {
     telemetry_uart_reply_next_data_frame();
   }
 }
@@ -714,6 +737,7 @@ void telemetry_uart_handle_rx_event(UART_HandleTypeDef *huart, uint16_t size) {
 
   const HAL_UART_RxEventTypeTypeDef event_type = HAL_UARTEx_GetRxEventType(huart);
   g_telemetry_uart.rx_dma_event_count++;
+  g_gateway_uart_rx_dma_events++;
 #ifdef SEDS_FIRMWARE_SIM_TEST
   g_sim_uart_rx_irq_bytes++;
 #endif
@@ -732,6 +756,7 @@ void telemetry_uart_handle_rx_event(UART_HandleTypeDef *huart, uint16_t size) {
   if (telemetry_uart_start_rx_dma() != HAL_OK) {
     g_telemetry_uart.rx_dma_active = 0U;
     g_telemetry_uart.rx_restart_error_count++;
+    g_gateway_uart_rx_restarts_failed++;
   }
 }
 
@@ -742,11 +767,13 @@ void telemetry_uart_handle_error(UART_HandleTypeDef *huart) {
   }
 
   g_telemetry_uart.stats.rx_hw_error_count++;
+  g_gateway_uart_rx_hw_errors++;
   g_telemetry_uart.rx_dma_last_error_code = huart->ErrorCode;
   (void)HAL_UART_AbortReceive(huart);
   if (telemetry_uart_start_rx_dma() != HAL_OK) {
     g_telemetry_uart.rx_dma_active = 0U;
     g_telemetry_uart.rx_restart_error_count++;
+    g_gateway_uart_rx_restarts_failed++;
   }
 }
 

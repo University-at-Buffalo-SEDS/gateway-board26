@@ -23,6 +23,12 @@ SedsResult on_time_sync_packet(const SedsPacketView *pkt, void *user);
 
 SedsResult init_telemetry_router(void);
 
+/* ThreadX-wide serialization for every runtime entry into the SEDSNet router.
+ * Implemented by telemetry_hooks.c and recursive so router callbacks may
+ * safely re-enter through the C allocation/transport hooks. */
+void telemetry_lock(void);
+void telemetry_unlock(void);
+
 SedsResult log_telemetry_synchronous(SedsDataType data_type, const void *data,
                                      size_t element_count, size_t element_size);
 
@@ -57,6 +63,8 @@ uint64_t telemetry_unix_s(void);
 uint8_t telemetry_unix_is_valid(void);
 
 void telemetry_set_unix_time_ms(uint64_t unix_ms);
+
+void telemetry_hil_capture_requested_snapshot(void);
 
 void die(const char *fmt, ...);
 

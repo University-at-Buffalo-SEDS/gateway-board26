@@ -20,6 +20,14 @@ SIMULATOR_DOCKER_PLATFORM = os.environ.get(
 )
 
 
+def docker_run_prefix(docker: str) -> list[str]:
+    command = [docker, "run", "--platform", SIMULATOR_DOCKER_PLATFORM, "--rm"]
+    network = os.environ.get("SEDS_FIRMWARE_SIM_DOCKER_NETWORK")
+    if network:
+        command.extend(["--network", network])
+    return command
+
+
 def run_live(command: list[str], label: str) -> None:
     """Run a quiet simulator command with visible liveness updates."""
     print(f"[SIM] {label} started", flush=True)
@@ -64,14 +72,26 @@ def require_docker() -> str:
 
 def load_layout_for_build(repo_root: Path, build_subdir: str | None) -> dict:
     layout = json.loads((repo_root / "sim" / "board.json").read_text(encoding="utf-8"))
-    if build_subdir is None:
-        return layout
-    for name, value in layout.get("artifacts", {}).items():
-        parts = Path(value).parts
-        if len(parts) >= 3 and parts[0] == "build":
-            layout["artifacts"][name] = str(
-                Path("build", build_subdir, *parts[2:])
-            )
+    if build_subdir is not None:
+        for name, value in layout.get("artifacts", {}).items():
+            parts = Path(value).parts
+            if len(parts) >= 3 and parts[0] == "build":
+                layout["artifacts"][name] = str(
+                    Path("build", build_subdir, *parts[2:])
+                )
+    # CubeMX/library updates can move uwTick. Resolve it from the exact ELF
+    # instead of injecting time into a stale absolute RAM address.
+    elf_value = layout.get("artifacts", {}).get("elf")
+    nm = shutil.which("arm-none-eabi-nm")
+    if elf_value and nm:
+        elf = repo_root / elf_value
+        if elf.is_file():
+            output = subprocess.check_output([nm, "-n", str(elf)], text=True)
+            for line in output.splitlines():
+                fields = line.split()
+                if fields[-1:] == ["uwTick"]:
+                    layout["execution"]["hal_tick_address"] = int(fields[0], 16)
+                    break
     return layout
 
 
@@ -181,7 +201,7 @@ def run_full_simulation(
     with tempfile.TemporaryDirectory(prefix="seds-firmware-layout-") as directory:
         write_container_layout(Path(directory), layout)
         command = [
-            docker, "run", "--platform", SIMULATOR_DOCKER_PLATFORM, "--rm",
+            *docker_run_prefix(docker),
             "-v", f"{repo_root}:/firmware:ro",
             "-v", f"{directory}:/simulation:ro",
             image, "run",
@@ -216,19 +236,15 @@ def run_memory_profile(
     with tempfile.TemporaryDirectory(prefix="seds-firmware-profile-") as directory:
         write_container_layout(Path(directory), layout)
         command = [
-            docker, "run", "--platform", SIMULATOR_DOCKER_PLATFORM, "--rm",
+            *docker_run_prefix(docker),
             "-v", f"{repo_root}:/firmware:ro",
             "-v", f"{directory}:/simulation:ro",
             image, "profile",
             "--layout", "/simulation/board.json",
             "--firmware-root", "/firmware",
-            # Renode executes every firmware instruction. The board layout's
-            # accelerated HAL tick makes 20 ms sufficient to reach steady
-            # scheduler state; allocator longevity is exercised separately by
-            # the one-million-packet traffic model below. Longer instruction
-            # windows consume unbounded host resources without increasing the
-            # modeled STM32 RAM coverage.
-            "--virtual-time-ms", "20",
+            # Real firmware startup must finish before qualifying memory.
+            # Behavioral packet counts do not replace the linked soak.
+            "--virtual-time-ms", str(max(1000, layout["execution"]["virtual_time_ms"])),
             "--sample-count", "20",
             "--traffic-iterations", "1000000",
         ]
@@ -249,8 +265,9 @@ def run_unacknowledged_can_simulation(
         if probe.get("name") not in {"network_ready", "discovery_seen", "timesync_valid"}
     ]
     # The first three samples cover reset and CAN error-counter propagation.
-    # Qualify the steady-state samples so the test requires an observed TX
-    # failure without incorrectly failing on expected startup zeroes.
+    # HAL completion semantics differ by STM32 family: some drivers report a
+    # successful mailbox enqueue even when no peer ACKs it. Require continued
+    # TX progress and fatal-fault counters instead of a family-specific error.
     layout["execution"]["memory_probe_warmup_samples"] = min(
         4,
         max(3, int(layout["execution"].get("memory_probe_warmup_samples", 0))),
@@ -261,21 +278,21 @@ def run_unacknowledged_can_simulation(
     for probe in layout["execution"]["memory_probes"]:
         if probe.get("name") == "fdcan_tx_fail":
             probe.pop("maximum", None)
-            probe["minimum"] = 1
-        if probe.get("name") == "fdcan_tx_ok":
             probe.pop("minimum", None)
+        if probe.get("name") == "fdcan_tx_ok":
+            probe["minimum"] = 1
 
     with tempfile.TemporaryDirectory(prefix="seds-firmware-isolated-can-") as directory:
         write_container_layout(Path(directory), layout)
         command = [
-            docker, "run", "--platform", SIMULATOR_DOCKER_PLATFORM, "--rm",
+            *docker_run_prefix(docker),
             "-v", f"{repo_root}:/firmware:ro",
             "-v", f"{directory}:/simulation:ro",
             image, "profile",
             "--layout", "/simulation/board.json",
             "--firmware-root", "/firmware",
             "--can-unacknowledged",
-            "--virtual-time-ms", "250",
+            "--virtual-time-ms", str(max(1000, layout["execution"]["virtual_time_ms"])),
             "--sample-count", "5",
             "--traffic-iterations", "100000",
         ]
@@ -460,6 +477,7 @@ def run_network_simulation(
             {"node": "rf", "after_sample": reboot_after_sample},
             {"node": "power", "after_sample": reboot_after_sample},
             {"node": "flight", "after_sample": reboot_after_sample},
+            {"node": "groundstation", "after_sample": reboot_after_sample},
         ] if perform_reboots else [],
         "can_ack_events": (
             [
@@ -666,9 +684,22 @@ def run_network_simulation(
             ),
         ],
         "host_log_assertions": [
+            {"name": "GroundStation preference survives discovery and process restart",
+             "node": "groundstation",
+             "contains": "full-bay preferred discovery master GS verified after named discovery",
+             "minimum_occurrences": 2 if perform_reboots else 1},
             {"name": "GroundStation discovered every board by autonomous name",
              "node": "groundstation",
-             "contains": "AB,DAQ,FC,GB,PB,RF,VB"},
+             "contains": "AB,DAQ,FC,GB,PB,RF,VB",
+             "minimum_occurrences": 2 if perform_reboots else 1},
+            {"name": "GroundStation attributed traffic to every board identity",
+             "node": "groundstation",
+             "contains": "full-bay per-board traffic attribution ready:",
+             "minimum_occurrences": 2 if perform_reboots else 1},
+            {"name": "GroundStation network graph labelled every board with its own traffic",
+             "node": "groundstation",
+             "contains": "full-bay network graph attribution ready:",
+             "minimum_occurrences": 2 if perform_reboots else 1},
             {"name": "Valve acknowledgement completed the routed return path",
              "node": "groundstation",
              "contains": "full-bay valve ACK reached GroundStation"},
@@ -707,6 +738,9 @@ def run_network_simulation(
                  "contains": f"full-bay fill telemetry reached GroundStation from {node}"}
                 for node in ("GB", "AB", "VB", "DAQ")
             ],
+            {"name": "GroundStation received the DAQ calibrated 50 Hz loadcell stream",
+             "node": "groundstation",
+             "contains": "full-bay DAQ calibrated loadcell 50 Hz stream reached GroundStation"},
         ],
     }
 
@@ -732,7 +766,7 @@ def run_network_simulation(
         )
         (root / "topology.json").chmod(0o644)
         command = [
-            docker, "run", "--platform", SIMULATOR_DOCKER_PLATFORM, "--rm"
+            *docker_run_prefix(docker)
         ]
         for node, path in roots.items():
             command += ["-v", f"{path}:/nodes/{node}:ro"]

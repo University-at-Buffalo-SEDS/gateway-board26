@@ -194,6 +194,7 @@ void telemetry_unlock(void)
 void *telemetryMalloc(size_t xSize)
 {
     void *ptr = NULL;
+    UINT allocation_status = TX_NO_MEMORY;
 
     /* Defensive: if byte pool isn't registered yet, return NULL */
     if (rust_byte_pool_external == NULL)
@@ -212,12 +213,26 @@ void *telemetryMalloc(size_t xSize)
         g_telemetry_max_alloc_request = (uint32_t)xSize;
     }
 
-    /*
-     * Allow a brief wait so telemetry bursts don't immediately fail allocator
-     * requests and trigger panic paths in Rust.
-     */
-    UINT allocation_status = tx_byte_allocate(rust_byte_pool_external, &ptr, xSize, 5);
-    if (allocation_status != TX_SUCCESS && rust_emergency_byte_pool_external != NULL)
+    /* Keep topology/schema serialization blocks away from the heavily churned
+     * small-object pool. On the Gateway a live capture observed a 6152-byte
+     * request fail with 6776 bytes free across 303 fragments. Reserving a
+     * second pool is deterministic; trying to defragment a live ThreadX pool
+     * is neither safe nor supported. */
+    if (xSize >= 4096U && rust_emergency_byte_pool_external != NULL)
+    {
+        allocation_status = tx_byte_allocate(
+            rust_emergency_byte_pool_external, &ptr, xSize, 5);
+        if (allocation_status == TX_SUCCESS)
+        {
+            g_telemetry_alloc_emergency_recoveries++;
+        }
+    }
+    if (allocation_status != TX_SUCCESS)
+    {
+        allocation_status = tx_byte_allocate(rust_byte_pool_external, &ptr, xSize, 5);
+    }
+    if (allocation_status != TX_SUCCESS && xSize < 4096U &&
+        rust_emergency_byte_pool_external != NULL)
     {
         allocation_status = tx_byte_allocate(
             rust_emergency_byte_pool_external, &ptr, xSize, 5);

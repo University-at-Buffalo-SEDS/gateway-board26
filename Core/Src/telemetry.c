@@ -78,6 +78,19 @@ static uint64_t g_local_unix_ms = 0ULL;
 
 RouterState g_router = {.r = NULL, .created = 0U, .start_time = 0ULL};
 
+#ifdef GATEWAY_HIL_DIAGNOSTICS
+/* Write 1 to g_gateway_hil_snapshot_request through ST-Link. The telemetry
+ * thread captures each JSON document once, then publishes ready=1. This is
+ * deliberately absent from production images so diagnostics cannot consume
+ * routing bandwidth or permanently reduce heap headroom. */
+volatile uint32_t g_gateway_hil_snapshot_request = 0U;
+volatile uint32_t g_gateway_hil_snapshot_ready = 0U;
+volatile int32_t g_gateway_hil_topology_result = SEDS_ERR;
+volatile int32_t g_gateway_hil_runtime_result = SEDS_ERR;
+char g_gateway_hil_topology[4096];
+char g_gateway_hil_runtime[3072];
+#endif
+
 SedsResult tx_send(const uint8_t *bytes, size_t len, void *user);
 
 /* Exported simulator/HIL health signals. A linked-bay test requires both a
@@ -182,12 +195,14 @@ void telemetry_uart_handle_data(const uint8_t *payload, size_t len) {
     return;
   }
 
+  telemetry_lock();
   if (telemetry_uart_side_id() >= 0) {
     result = seds_router_receive_packed_from_side(
         g_router.r, (uint32_t)telemetry_uart_side_id(), payload, len);
   } else {
     result = seds_router_receive_packed(g_router.r, payload, len);
   }
+  telemetry_unlock();
 
   if (result != SEDS_OK) {
     telemetry_uart_note_deserialize_result(0U);
@@ -316,8 +331,14 @@ uint64_t telemetry_unix_ms(void) {
 #else
   uint64_t unix_ms = 0ULL;
 
-  if (g_router.r && seds_router_get_network_time_ms(g_router.r, &unix_ms) == SEDS_OK) {
-    return unix_ms;
+  if (g_router.r) {
+    SedsResult result;
+    telemetry_lock();
+    result = seds_router_get_network_time_ms(g_router.r, &unix_ms);
+    telemetry_unlock();
+    if (result == SEDS_OK) {
+      return unix_ms;
+    }
   }
 
   if (telemetry_timesync_is_source() && g_local_unix_valid) {
@@ -338,8 +359,28 @@ void telemetry_set_unix_time_ms(uint64_t unix_ms) {
 
 #ifdef TELEMETRY_ENABLED
   if (g_router.r != NULL) {
+    telemetry_lock();
     (void)telemetry_apply_local_unix_time_locked(g_router.r);
+    telemetry_unlock();
   }
+#endif
+}
+
+void telemetry_hil_capture_requested_snapshot(void) {
+#ifdef GATEWAY_HIL_DIAGNOSTICS
+  if (g_gateway_hil_snapshot_request == 0U || g_router.r == NULL) {
+    return;
+  }
+
+  g_gateway_hil_snapshot_ready = 0U;
+  telemetry_lock();
+  g_gateway_hil_topology_result = seds_router_export_topology(
+      g_router.r, g_gateway_hil_topology, sizeof(g_gateway_hil_topology));
+  g_gateway_hil_runtime_result = seds_router_export_runtime_stats(
+      g_router.r, g_gateway_hil_runtime, sizeof(g_gateway_hil_runtime));
+  telemetry_unlock();
+  g_gateway_hil_snapshot_request = 0U;
+  g_gateway_hil_snapshot_ready = 1U;
 #endif
 }
 
@@ -425,11 +466,14 @@ static void telemetry_board_link_rx(const uint8_t *data, size_t len, void *user)
   }
 
   if (g_board_link_side_id >= 0) {
+    telemetry_lock();
     result = seds_router_receive_packed_from_side(
         g_router.r, (uint32_t)g_board_link_side_id, data, len);
   } else {
+    telemetry_lock();
     result = seds_router_receive_packed(g_router.r, data, len);
   }
+  telemetry_unlock();
 
   if (result != SEDS_OK) {
     telemetry_signal_deserialize_failure();
@@ -460,11 +504,14 @@ void rx_asynchronous(const uint8_t *bytes, size_t len) {
   }
 
   if (g_can_side_id >= 0) {
+    telemetry_lock();
     result = seds_router_receive_packed_from_side(
         g_router.r, (uint32_t)g_can_side_id, bytes, len);
   } else {
+    telemetry_lock();
     result = seds_router_receive_packed(g_router.r, bytes, len);
   }
+  telemetry_unlock();
 
   if (result != SEDS_OK) {
     telemetry_signal_deserialize_failure();
@@ -489,11 +536,14 @@ static UNUSED_FUNCTION void rx_synchronous(const uint8_t *bytes, size_t len) {
   }
 
   if (g_can_side_id >= 0) {
+    telemetry_lock();
     (void)seds_router_receive_packed_from_side(g_router.r, (uint32_t)g_can_side_id, bytes,
                                                    len);
   } else {
+    telemetry_lock();
     (void)seds_router_receive_packed(g_router.r, bytes, len);
   }
+  telemetry_unlock();
 #endif
 }
 
@@ -516,8 +566,10 @@ SedsResult telemetry_poll_timesync(void) {
     return SEDS_ERR;
   }
 
+  telemetry_lock();
   const SedsResult result = seds_router_poll_timesync(g_router.r, NULL);
   telemetry_update_network_health(g_router.r);
+  telemetry_unlock();
   return result;
 #endif
 }
@@ -530,7 +582,10 @@ SedsResult telemetry_announce_discovery(void) {
     return SEDS_ERR;
   }
 
-  return seds_router_announce_discovery(g_router.r);
+  telemetry_lock();
+  const SedsResult result = seds_router_announce_discovery(g_router.r);
+  telemetry_unlock();
+  return result;
 #endif
 }
 
@@ -543,16 +598,18 @@ SedsResult telemetry_poll_discovery(void) {
   }
 
   bool did_queue = false;
+  telemetry_lock();
   (void)flight_state_cache_poll(g_router.r);
   const SedsResult result = seds_router_poll_discovery(g_router.r, &did_queue);
   if (result == SEDS_OK) {
     sim_probe_emit_heartbeat(g_router.r, telemetry_now_ms());
   }
   telemetry_update_network_health(g_router.r);
+  telemetry_unlock();
   return result;
 #endif
 }
-SedsResult init_telemetry_router(void) {
+static SedsResult init_telemetry_router_locked(void) {
 #ifndef TELEMETRY_ENABLED
   return SEDS_OK;
 #else
@@ -589,7 +646,7 @@ SedsResult init_telemetry_router(void) {
    * its side id to the router, which preserves the packed frame and never
    * forwards it back to its ingress side. Endpoint reachability is learned by
    * discovery; the gateway must not advertise remote endpoints as local. */
-  r = seds_router_new(Seds_RM_Relay, node_now_since_ms, NULL, NULL, 0U);
+  r = seds_router_new(node_now_since_ms, NULL, NULL, 0U);
   if (!r) {
     printf("Error: failed to create router\r\n");
     g_router.r = NULL;
@@ -599,6 +656,12 @@ SedsResult init_telemetry_router(void) {
     g_board_link_side_id = -1;
 #endif
     telemetry_uart_set_side_id(-1);
+    return SEDS_ERR;
+  }
+
+  if (seds_router_set_preferred_discovery_master(r, "GS", 2U) != SEDS_OK) {
+    printf("Error: failed to prefer GroundStation discovery master\r\n");
+    seds_router_free(r);
     return SEDS_ERR;
   }
 
@@ -684,6 +747,18 @@ SedsResult init_telemetry_router(void) {
 #endif
 }
 
+SedsResult init_telemetry_router(void) {
+  SedsResult result;
+
+  /* Data acquisition and link service tasks can reach the router at the same
+   * time during startup. Serialize construction and all later entry through
+   * the recursive ThreadX telemetry mutex. */
+  telemetry_lock();
+  result = init_telemetry_router_locked();
+  telemetry_unlock();
+  return result;
+}
+
 static inline SedsElemKind guess_kind_from_elem_size(size_t elem_size) {
   if (elem_size == 4U || elem_size == 8U) {
     return SEDS_EK_FLOAT;
@@ -702,8 +777,12 @@ SedsResult log_telemetry_synchronous(SedsDataType data_type, const void *data,
     return SEDS_ERR;
   }
 
-  return seds_router_log_typed(g_router.r, data_type, data, element_count, element_size,
-                               guess_kind_from_elem_size(element_size));
+  telemetry_lock();
+  const SedsResult result = seds_router_log_typed(
+      g_router.r, data_type, data, element_count, element_size,
+      guess_kind_from_elem_size(element_size));
+  telemetry_unlock();
+  return result;
 #else
   (void)data_type;
   print_data_no_telem((void *)data, element_count * element_size);
@@ -722,8 +801,12 @@ SedsResult log_telemetry_asynchronous(SedsDataType data_type, const void *data,
     return SEDS_ERR;
   }
 
-  return seds_router_log_queue_typed(g_router.r, data_type, data, element_count, element_size,
-                                     guess_kind_from_elem_size(element_size));
+  telemetry_lock();
+  const SedsResult result = seds_router_log_queue_typed(
+      g_router.r, data_type, data, element_count, element_size,
+      guess_kind_from_elem_size(element_size));
+  telemetry_unlock();
+  return result;
 #else
   (void)data_type;
   print_data_no_telem((void *)data, element_count * element_size);
@@ -741,7 +824,11 @@ SedsResult log_telemetry_string_asynchronous(SedsDataType data_type, const char 
     return SEDS_ERR;
   }
 
-  return seds_router_log_string_ex(g_router.r, data_type, str, strlen(str), NULL, 1);
+  telemetry_lock();
+  const SedsResult result =
+      seds_router_log_string_ex(g_router.r, data_type, str, strlen(str), NULL, 1);
+  telemetry_unlock();
+  return result;
 #else
   (void)data_type;
   (void)str;
@@ -757,7 +844,10 @@ SedsResult dispatch_tx_queue(void) {
     return SEDS_ERR;
   }
 
-  return seds_router_process_tx_queue(g_router.r);
+  telemetry_lock();
+  const SedsResult result = seds_router_process_tx_queue(g_router.r);
+  telemetry_unlock();
+  return result;
 #endif
 }
 
@@ -769,7 +859,10 @@ SedsResult process_rx_queue(void) {
     return SEDS_ERR;
   }
 
-  return seds_router_process_rx_queue(g_router.r);
+  telemetry_lock();
+  const SedsResult result = seds_router_process_rx_queue(g_router.r);
+  telemetry_unlock();
+  return result;
 #endif
 }
 
@@ -782,7 +875,11 @@ SedsResult dispatch_tx_queue_timeout(uint32_t timeout_ms) {
     return SEDS_ERR;
   }
 
-  return seds_router_process_tx_queue_with_timeout(g_router.r, timeout_ms);
+  telemetry_lock();
+  const SedsResult result =
+      seds_router_process_tx_queue_with_timeout(g_router.r, timeout_ms);
+  telemetry_unlock();
+  return result;
 #endif
 }
 
@@ -795,7 +892,11 @@ SedsResult process_rx_queue_timeout(uint32_t timeout_ms) {
     return SEDS_ERR;
   }
 
-  return seds_router_process_rx_queue_with_timeout(g_router.r, timeout_ms);
+  telemetry_lock();
+  const SedsResult result =
+      seds_router_process_rx_queue_with_timeout(g_router.r, timeout_ms);
+  telemetry_unlock();
+  return result;
 #endif
 }
 
@@ -808,7 +909,11 @@ SedsResult process_all_queues_timeout(uint32_t timeout_ms) {
     return SEDS_ERR;
   }
 
-  return seds_router_process_all_queues_with_timeout(g_router.r, timeout_ms);
+  telemetry_lock();
+  const SedsResult result =
+      seds_router_process_all_queues_with_timeout(g_router.r, timeout_ms);
+  telemetry_unlock();
+  return result;
 #endif
 }
 
@@ -831,7 +936,11 @@ static SedsResult log_error_impl(uint8_t queue, const char *fmt, va_list args) {
 
   if (len < 0) {
     const char *empty = "";
-    return seds_router_log_string_ex(g_router.r, SEDS_DT_TELEMETRY_ERROR, empty, 0U, NULL, queue);
+    telemetry_lock();
+    const SedsResult result = seds_router_log_string_ex(
+        g_router.r, SEDS_DT_TELEMETRY_ERROR, empty, 0U, NULL, queue);
+    telemetry_unlock();
+    return result;
   }
 
   if (len > 512) {
@@ -842,11 +951,18 @@ static SedsResult log_error_impl(uint8_t queue, const char *fmt, va_list args) {
   written = vsnprintf(buf, (size_t)len + 1U, fmt, args);
   if (written < 0) {
     const char *empty = "";
-    return seds_router_log_string_ex(g_router.r, SEDS_DT_TELEMETRY_ERROR, empty, 0U, NULL, queue);
+    telemetry_lock();
+    const SedsResult result = seds_router_log_string_ex(
+        g_router.r, SEDS_DT_TELEMETRY_ERROR, empty, 0U, NULL, queue);
+    telemetry_unlock();
+    return result;
   }
 
-  return seds_router_log_string_ex(g_router.r, SEDS_DT_TELEMETRY_ERROR, buf, (size_t)written,
-                                   NULL, queue);
+  telemetry_lock();
+  const SedsResult result = seds_router_log_string_ex(
+      g_router.r, SEDS_DT_TELEMETRY_ERROR, buf, (size_t)written, NULL, queue);
+  telemetry_unlock();
+  return result;
 }
 
 SedsResult log_error_asynchronous(const char *fmt, ...) {

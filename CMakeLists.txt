@@ -30,6 +30,11 @@ message("Build type: " ${CMAKE_BUILD_TYPE})
 
 # Enable CMake support for ASM and C languages
 enable_language(C ASM)
+option(GATEWAY_HIL_DIAGNOSTICS
+    "Expose one-shot SEDSNet topology/runtime snapshots for ST-Link diagnosis" OFF)
+if(GATEWAY_HIL_DIAGNOSTICS)
+    add_compile_definitions(GATEWAY_HIL_DIAGNOSTICS=1)
+endif()
 option(SEDS_FIRMWARE_SIM_TEST "Enable simulator-only network observability" OFF)
 if(SEDS_FIRMWARE_SIM_TEST)
     add_compile_definitions(SEDS_FIRMWARE_SIM_TEST=1)
@@ -81,8 +86,8 @@ target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
     CAN_BUS_REASM_MAX_BYTES=128
 )
 
-set(GATEWAY_SEDSNET_EMERGENCY_POOL_SIZE "2688" CACHE STRING
-    "Reclaimed CAN reassembly RAM reserved for allocator fragmentation recovery" FORCE)
+set(GATEWAY_SEDSNET_EMERGENCY_POOL_SIZE "16384" CACHE STRING
+    "Dedicated SEDSNet large-allocation pool isolated from small-object churn" FORCE)
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
     GATEWAY_SEDSNET_EMERGENCY_POOL_SIZE=${GATEWAY_SEDSNET_EMERGENCY_POOL_SIZE})
 
@@ -102,8 +107,8 @@ set(SEDSNET_MAX_STACK_PAYLOAD "128" CACHE STRING "" FORCE)
 set(SEDSNET_MAX_QUEUE_BUDGET "8192" CACHE STRING
     "Bound SEDSNet queues below the Gateway shared ThreadX pool reserve" FORCE)
 set(SEDSNET_MAX_RECENT_RX_IDS "16" CACHE STRING "" FORCE)
-set(SEDSNET_ENV_STARTING_QUEUE_SIZE "512" CACHE STRING
-    "Leave room for each Gateway router side within the bounded queue budget" FORCE)
+set(SEDSNET_ENV_STARTING_QUEUE_SIZE "2048" CACHE STRING
+    "Preallocate useful fixed-capacity Gateway queues while memory is contiguous" FORCE)
 set(SEDSNET_ENV_QUEUE_GROW_STEP "1.0" CACHE STRING
     "Use fixed-capacity queues to prevent ThreadX byte-pool fragmentation" FORCE)
 set(SEDSNET_ENV_PAYLOAD_COMPRESS_THRESHOLD "30" CACHE STRING "" FORCE)

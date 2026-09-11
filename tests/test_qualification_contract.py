@@ -14,26 +14,30 @@ class QualificationContractTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn("CAN_BUS_REASM_MAX_BYTES=128", cmake)
-        self.assertIn('GATEWAY_SEDSNET_EMERGENCY_POOL_SIZE "2688"', cmake)
+        self.assertIn('GATEWAY_SEDSNET_EMERGENCY_POOL_SIZE "16384"', cmake)
         self.assertIn("sedsnet_emergency_pool_memory", app)
         self.assertIn("telemetry_set_emergency_byte_pool", app)
         self.assertIn("g_telemetry_alloc_emergency_recoveries++", hooks)
+        self.assertIn("xSize >= 4096U", hooks)
+        self.assertIn("303 fragments", hooks)
 
     def test_gateway_telemetry_stack_has_profiled_headroom(self):
         root = Path(build.__file__).resolve().parent
         thread = (root / "Core" / "Src" / "telemetry_thread.c").read_text(
             encoding="utf-8"
         )
+        build_script = (root / "build.py").read_text(encoding="utf-8")
         config = (
             root / "AZURE_RTOS" / "App" / "app_azure_rtos_config.h"
         ).read_text(encoding="utf-8")
         ioc = (root / "gateway_board.ioc").read_text(encoding="utf-8")
         self.assertIn("TELEMETRY_THREAD_STACK_SIZE (13U * 1024U)", thread)
-        self.assertIn("TX_APP_MEM_POOL_SIZE                     64336", config)
-        self.assertIn("TX_APP_MEM_POOL_SIZE=64336", ioc)
+        self.assertIn("TX_APP_MEM_POOL_SIZE                     71680", config)
+        self.assertIn("TX_APP_MEM_POOL_SIZE=71680", ioc)
         self.assertIn("UX_DEVICE_APP_MEM_POOL_SIZE=20904", ioc)
 
-        layout = json.loads((root / "sim" / "board.json").read_text(encoding="utf-8"))
+        from sim.run_full import load_layout_for_build
+        layout = load_layout_for_build(root, None)
         probes = {
             probe["name"]: probe
             for probe in layout["execution"]["memory_probes"]
@@ -69,6 +73,7 @@ class QualificationContractTests(unittest.TestCase):
 
         self.assertIn('"profile"', runner)
         self.assertIn('"--sample-count", "20"', runner)
+        self.assertEqual(runner.count('str(max(1000, layout["execution"]["virtual_time_ms"]))'), 2)
         self.assertIn('"--traffic-iterations", "1000000"', runner)
         self.assertIn('"bay"', runner)
         self.assertIn('"tx_probe": "fdcan_tx_ok"', runner)
@@ -121,6 +126,8 @@ class QualificationContractTests(unittest.TestCase):
         self.assertNotIn("< (uint32_t)frag_cnt", can_bus)
         self.assertIn("BOARD_CAN_MAX_FRAME_BYTES 128U", telemetry)
         self.assertIn('SEDSNET_MAX_QUEUE_BUDGET "8192"', cmake)
+        self.assertIn('SEDSNET_ENV_STARTING_QUEUE_SIZE "2048"', cmake)
+        self.assertIn('SEDSNET_ENV_QUEUE_GROW_STEP "1.0"', cmake)
 
     def test_physical_bridge_preserves_the_packed_wire_image(self):
         root = Path(build.__file__).resolve().parent
@@ -144,7 +151,8 @@ class QualificationContractTests(unittest.TestCase):
         # truncating or manually forwarding them.
         bridge = telemetry[uart_ingress: telemetry.index("static uint32_t telemetry_timesync_role")]
         self.assertNotIn("seds_pkt_pack", bridge)
-        self.assertIn("seds_router_new(Seds_RM_Relay", telemetry)
+        self.assertIn("seds_router_new(node_now_since_ms", telemetry)
+        self.assertNotIn("Seds_RM_", telemetry)
         self.assertIn('r, "can", 3U, tx_send, NULL, false', telemetry)
         self.assertIn('seds_router_add_side_packed_profile(\n      r, "uart"', telemetry)
         self.assertIn('r, "uart", 4U, telemetry_uart_tx_send, NULL, false,', telemetry)
@@ -159,6 +167,9 @@ class QualificationContractTests(unittest.TestCase):
         uart = (root / "Core" / "Src" / "telemetry_uart.c").read_text(
             encoding="utf-8"
         )
+        thread = (root / "Core" / "Src" / "telemetry_thread.c").read_text(
+            encoding="utf-8"
+        )
         self.assertIn("is_sedsnet_side_transport", uart)
         self.assertIn("payload[0] == (uint8_t)'S'", uart)
         self.assertIn("is_sedsnet_side_transport == 0U", uart)
@@ -169,6 +180,75 @@ class QualificationContractTests(unittest.TestCase):
         telemetry = (root / "Core" / "Src" / "telemetry.c").read_text(encoding="utf-8")
         self.assertNotIn("seds_router_export_topology_len", telemetry)
         self.assertIn("g_telemetry_discovery_seen = 1U", telemetry)
+
+    def test_all_runtime_router_entry_is_serialized_across_threadx_tasks(self):
+        root = Path(build.__file__).resolve().parent
+        telemetry = (root / "Core" / "Src" / "telemetry.c").read_text(
+            encoding="utf-8"
+        )
+        for function in (
+            "telemetry_uart_handle_data",
+            "rx_asynchronous",
+            "log_telemetry_synchronous",
+            "log_telemetry_asynchronous",
+            "log_telemetry_string_asynchronous",
+            "dispatch_tx_queue",
+            "process_rx_queue",
+            "dispatch_tx_queue_timeout",
+            "process_rx_queue_timeout",
+            "process_all_queues_timeout",
+        ):
+            marker = ("void " if function in ("telemetry_uart_handle_data", "rx_asynchronous")
+                      else "SedsResult ") + function
+            body = telemetry[telemetry.index(marker) :]
+            body = body[: body.index("\n}")]
+            self.assertIn("telemetry_lock();", body, function)
+            self.assertIn("telemetry_unlock();", body, function)
+
+        unix_time = telemetry[telemetry.index("uint64_t telemetry_unix_ms") :]
+        unix_time = unix_time[: unix_time.index("\n}")]
+        self.assertIn("telemetry_lock();", unix_time)
+        self.assertIn("telemetry_unlock();", unix_time)
+
+    def test_hil_router_snapshot_is_one_shot_and_not_in_production_by_default(self):
+        root = Path(build.__file__).resolve().parent
+        build_script = (root / "build.py").read_text(encoding="utf-8")
+        cmake = (root / "CMakeLists.txt").read_text(encoding="utf-8")
+        telemetry = (root / "Core" / "Src" / "telemetry.c").read_text(
+            encoding="utf-8"
+        )
+        thread = (root / "Core" / "Src" / "telemetry_thread.c").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("option(GATEWAY_HIL_DIAGNOSTICS", cmake)
+        self.assertIn('"Expose one-shot SEDSNet topology/runtime snapshots for ST-Link diagnosis" OFF', cmake)
+        self.assertIn("#ifdef GATEWAY_HIL_DIAGNOSTICS", telemetry)
+        self.assertIn("g_gateway_hil_snapshot_request == 0U", telemetry)
+        self.assertIn("seds_router_export_topology(", telemetry)
+        self.assertNotIn("seds_router_export_topology_len", telemetry)
+        self.assertIn("telemetry_hil_capture_requested_snapshot();", thread)
+        self.assertIn("-DGATEWAY_HIL_DIAGNOSTICS=", build_script)
+
+    def test_uart_bridge_preserves_discovery_under_backpressure(self):
+        root = Path(build.__file__).resolve().parent
+        uart = (root / "Core" / "Src" / "telemetry_uart.c").read_text(
+            encoding="utf-8"
+        )
+        thread = (root / "Core" / "Src" / "telemetry_thread.c").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("wire_time_ms + 50U", uart)
+        self.assertIn("telemetry_uart_reply_next_data_frame();", uart)
+        flush = uart.split("static void telemetry_uart_flush_tx_queue", 1)[1]
+        flush = flush.split("SedsResult telemetry_uart_init", 1)[0]
+        self.assertNotIn("while (g_telemetry_uart.tx_count", flush)
+        self.assertIn("if (g_telemetry_uart.tx_count", flush)
+        self.assertIn("g_gateway_uart_tx_failures", uart)
+        self.assertIn("g_gateway_uart_rx_dma_events", uart)
+        self.assertIn("g_gateway_uart_rx_hw_errors", uart)
+        self.assertIn("g_gateway_uart_rx_restarts_failed", uart)
+        self.assertIn("g_gateway_uart_rx_ring_drops", uart)
+        self.assertIn("g_gateway_telemetry_loop_count++", thread)
 
 if __name__ == "__main__":
     unittest.main()

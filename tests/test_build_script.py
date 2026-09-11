@@ -82,6 +82,14 @@ class OtaBuildScriptTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "daemon is not available"):
                     run_full.require_docker()
 
+    def test_docker_run_prefix_supports_restricted_hosts(self):
+        from sim import run_full
+
+        with mock.patch.dict(run_full.os.environ, {}, clear=True):
+            self.assertEqual(run_full.docker_run_prefix("/usr/bin/docker"), ["/usr/bin/docker", "run", "--platform", "linux/amd64", "--rm"])
+        with mock.patch.dict(run_full.os.environ, {"SEDS_FIRMWARE_SIM_DOCKER_NETWORK": "host"}, clear=True):
+            self.assertEqual(run_full.docker_run_prefix("/usr/bin/docker")[-2:], ["--network", "host"])
+
     def test_missing_registry_image_is_built_from_a_fresh_clone(self):
         from sim import run_full
 
