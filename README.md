@@ -7,7 +7,7 @@ firmware. The gateway driver only transports complete SEDSNet packets. SEDSNet
 discovery and learned subscriptions own routing, so application data is not
 manually fanned out.
 
-CMake fetches SEDSNet v4.0.27 and SEDS LaunchCore v1.0.0 without submodules.
+CMake fetches SEDSNet v4.0.28 and SEDS LaunchCore v1.0.0 without submodules.
 LaunchCore derives linker scripts and the boot/OTA layout from
 `Bootloader/board_config.h`.
 
@@ -50,6 +50,10 @@ Open the checked-in `.ioc` file and generate with the CMake toolchain. Keep user
 code enabled. The `.ioc` is the source of truth for the ThreadX and USBX pool
 sizes; unit tests compare those values with the generated Azure RTOS headers so
 regeneration cannot silently shrink, grow, or repartition the pools.
+The application pool is 72 KiB (73,728 bytes), including additional headroom
+for full-network discovery bursts; the separate large-allocation emergency
+pool remains 16 KiB. Qualification retains the 1 KiB minimum normal-pool
+reserve rather than accepting near-exhaustion as a passing result.
 
 The top-level CMake project is board-owned and reconnects generated STM32
 sources with SEDSNet, LaunchCore, its generated linker scripts, persistence, and
