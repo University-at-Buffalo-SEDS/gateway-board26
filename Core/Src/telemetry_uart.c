@@ -1,4 +1,5 @@
 #include "telemetry_uart.h"
+#include "gateway_status_probe.h"
 #include "sim_network_probe.h"
 
 #ifdef TELEMETRY_BOARD_LINK_UART
@@ -509,8 +510,12 @@ static void telemetry_uart_write_frame(uint8_t magic, const uint8_t *payload, si
                         wire_time_ms + 50U) == HAL_OK) {
     g_telemetry_uart.tx_frame_count++;
     g_gateway_uart_tx_frames++;
+    gateway_status_observe(GW_STATUS_UART_SENT, payload, len,
+                           SEDS_DT_UMBILICAL_STATUS, tx_time_get());
   } else {
     g_gateway_uart_tx_failures++;
+    gateway_status_observe(GW_STATUS_UART_FAILED, payload, len,
+                           SEDS_DT_UMBILICAL_STATUS, tx_time_get());
   }
 #ifdef SEDS_FIRMWARE_SIM_TEST
   if ((magic == TELEMETRY_UART_REQ_DATA_MAGIC ||
@@ -652,7 +657,10 @@ SedsResult telemetry_uart_tx_send(const uint8_t *bytes, size_t len, void *user) 
   }
 #endif
 
-  return telemetry_uart_queue_push(bytes, len) ? SEDS_OK : SEDS_IO;
+  if (!telemetry_uart_queue_push(bytes, len)) return SEDS_IO;
+  gateway_status_observe(GW_STATUS_UART_QUEUED, bytes, len,
+                         SEDS_DT_UMBILICAL_STATUS, tx_time_get());
+  return SEDS_OK;
 }
 
 void telemetry_uart_send_data_frame(const uint8_t *payload, size_t len) {

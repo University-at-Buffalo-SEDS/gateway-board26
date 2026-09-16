@@ -2,6 +2,10 @@
 #include "telemetry.h"
 #include "flight_state_cache.h"
 #include "sim_network_probe.h"
+#include "gateway_status_probe.h"
+volatile gateway_status_probe g_gateway_status_path[4];
+gateway_probe_template g_gateway_status_templates[2][GATEWAY_STATUS_TEMPLATE_CAPACITY];
+uint32_t g_gateway_status_next[2];
 #include "ota_stream.h"
 
 #include "app_threadx.h"
@@ -427,6 +431,8 @@ static SedsResult board_link_tx_send(const uint8_t *bytes, size_t len, void *use
 
 static void telemetry_can_rx(const uint8_t *data, size_t len, void *user) {
   (void)user;
+  gateway_status_observe(GW_STATUS_CAN_RX, data, len,
+                         SEDS_DT_UMBILICAL_STATUS, tx_time_get());
   sim_probe_observe_packed(data, len);
 #ifdef SEDS_FIRMWARE_SIM_TEST
   g_sim_can_rx_callback_count++;
