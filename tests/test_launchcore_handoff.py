@@ -4,7 +4,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXED_LAUNCHCORE = "v1.0.0"
-FIXED_SEDSNET = "v4.0.31"
+FIXED_SEDSNET = "main"
 UNSAFE_HANDOFFS = {
     "1ab6cd3dcddb7acaacb9dbfc16159f36f19363a8",
     "709474c68b83d259ba8657038340577ed4e8c6e4",
@@ -12,7 +12,7 @@ UNSAFE_HANDOFFS = {
 
 
 class LaunchCoreHandoffContract(unittest.TestCase):
-    def test_dependencies_use_current_stable_releases(self):
+    def test_dependencies_use_launchcore_release_and_sedsnet_main(self):
         launchcore = (ROOT / "cmake/launchcore_stm32.cmake").read_text()
         sedsnet = (ROOT / "cmake/sedsnet_fetch.cmake").read_text()
         self.assertIn(f"GIT_TAG {FIXED_LAUNCHCORE}", launchcore)
@@ -24,7 +24,7 @@ class LaunchCoreHandoffContract(unittest.TestCase):
         for unsafe_revision in UNSAFE_HANDOFFS:
             self.assertNotIn(unsafe_revision, cmake)
 
-    def test_network_stack_uses_stable_release(self):
+    def test_network_stack_tracks_main(self):
         cmake = (ROOT / "cmake/sedsnet_fetch.cmake").read_text()
         self.assertIn(f"GIT_TAG {FIXED_SEDSNET}", cmake)
 
