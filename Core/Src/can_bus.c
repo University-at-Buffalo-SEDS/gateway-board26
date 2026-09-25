@@ -42,7 +42,11 @@
 #endif
 
 #ifndef CAN_BUS_POLLING
+#ifdef SEDS_FIRMWARE_SIM_TEST
 #define CAN_BUS_POLLING 1
+#else
+#define CAN_BUS_POLLING 0
+#endif
 #endif
 
 #ifndef CAN_BUS_TX_ENQUEUE_TIMEOUT_MS
@@ -184,6 +188,8 @@ static volatile uint16_t g_rx_head = 0;
 static volatile uint16_t g_rx_tail = 0;
 static volatile uint32_t g_rx_dropped_frames = 0;
 volatile uint32_t g_fdcan_rx_count = 0;
+volatile uint32_t g_fdcan_rx_hw_overflow_count = 0;
+volatile uint32_t g_fdcan_init_error_count = 0;
 volatile uint32_t g_fdcan_tx_ok_count = 0;
 volatile uint32_t g_fdcan_tx_fail_count = 0;
 volatile uint32_t g_fdcan_bus_off_count = 0;
@@ -536,21 +542,16 @@ static void handle_rx_frame(const can_bus_rx_frame_t *f, uint32_t now_ms) {
 
 void can_bus_init(FDCAN_HandleTypeDef *hfdcan) {
   g_hfdcan = hfdcan;
-  // subscribers static-zeroed
-  if (hfdcan != NULL) {
-    (void)HAL_FDCAN_Stop(hfdcan);
-    (void)can_bus_configure_filters(hfdcan);
-#if !CAN_BUS_POLLING
-    (void)HAL_FDCAN_ActivateNotification(
-        hfdcan, FDCAN_IT_RX_FIFO0_NEW_MESSAGE | FDCAN_IT_RX_FIFO1_NEW_MESSAGE, 0);
-#endif
-    (void)HAL_FDCAN_Start(hfdcan);
+  if (hfdcan != NULL && hfdcan->State == HAL_FDCAN_STATE_BUSY &&
+      HAL_FDCAN_Stop(hfdcan) != HAL_OK) {
+    g_fdcan_init_error_count++;
+    return;
   }
-
-  // reset rings + reasm
+  // Initialize the consumer state before enabling receive interrupts.
   g_rx_head = 0;
   g_rx_tail = 0;
   g_rx_dropped_frames = 0;
+  g_fdcan_rx_hw_overflow_count = 0;
   g_can_reasm_completed = 0;
   g_can_reasm_seq_resets = 0;
   g_can_reasm_slot_evictions = 0;
@@ -559,6 +560,21 @@ void can_bus_init(FDCAN_HandleTypeDef *hfdcan) {
   for (unsigned i = 0; i < CAN_BUS_REASM_SLOTS; i++) {
     reasm_reset(&g_reasm[i]);
   }
+  if (hfdcan == NULL) return;
+  if (can_bus_configure_filters(hfdcan) != HAL_OK) {
+    g_fdcan_init_error_count++;
+    return;
+  }
+#if !CAN_BUS_POLLING
+  // Drain the three-entry hardware FIFO promptly while the worker routes data.
+  if (HAL_FDCAN_ActivateNotification(hfdcan,
+        FDCAN_IT_RX_FIFO0_NEW_MESSAGE | FDCAN_IT_RX_FIFO1_NEW_MESSAGE |
+        FDCAN_IT_RX_FIFO0_MESSAGE_LOST | FDCAN_IT_RX_FIFO1_MESSAGE_LOST, 0) != HAL_OK) {
+    g_fdcan_init_error_count++;
+    return;
+  }
+#endif
+  if (HAL_FDCAN_Start(hfdcan) != HAL_OK) g_fdcan_init_error_count++;
 }
 
 HAL_StatusTypeDef can_bus_subscribe_rx(can_bus_rx_cb_t cb, void *user) {
@@ -758,7 +774,11 @@ void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan,
     return;
   }
 
-  if ((RxFifo0ITs & FDCAN_IT_RX_FIFO0_NEW_MESSAGE) == 0U) {
+  if ((RxFifo0ITs & FDCAN_IT_RX_FIFO0_MESSAGE_LOST) != 0U) {
+    g_fdcan_rx_hw_overflow_count++;
+  }
+  if ((RxFifo0ITs & (FDCAN_IT_RX_FIFO0_NEW_MESSAGE |
+                      FDCAN_IT_RX_FIFO0_MESSAGE_LOST)) == 0U) {
     return;
   }
 
@@ -771,7 +791,11 @@ void HAL_FDCAN_RxFifo1Callback(FDCAN_HandleTypeDef *hfdcan,
     return;
   }
 
-  if ((RxFifo1ITs & FDCAN_IT_RX_FIFO1_NEW_MESSAGE) == 0U) {
+  if ((RxFifo1ITs & FDCAN_IT_RX_FIFO1_MESSAGE_LOST) != 0U) {
+    g_fdcan_rx_hw_overflow_count++;
+  }
+  if ((RxFifo1ITs & (FDCAN_IT_RX_FIFO1_NEW_MESSAGE |
+                      FDCAN_IT_RX_FIFO1_MESSAGE_LOST)) == 0U) {
     return;
   }
 

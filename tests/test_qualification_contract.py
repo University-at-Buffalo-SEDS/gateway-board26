@@ -18,7 +18,7 @@ class QualificationContractTests(unittest.TestCase):
         self.assertIn("sedsnet_emergency_pool_memory", app)
         self.assertIn("telemetry_set_emergency_byte_pool", app)
         self.assertIn("g_telemetry_alloc_emergency_recoveries++", hooks)
-        self.assertIn("xSize >= 4096U", hooks)
+        self.assertIn("xSize >= 1024U", hooks)
         self.assertIn("303 fragments", hooks)
 
     def test_gateway_telemetry_stack_has_profiled_headroom(self):
@@ -125,7 +125,7 @@ class QualificationContractTests(unittest.TestCase):
         self.assertIn("CAN_BUS_TX_ENQUEUE_TIMEOUT_MS 5U", can_bus)
         self.assertNotIn("< (uint32_t)frag_cnt", can_bus)
         self.assertIn("BOARD_CAN_MAX_FRAME_BYTES 128U", telemetry)
-        self.assertIn('SEDSNET_MAX_QUEUE_BUDGET "8192"', cmake)
+        self.assertIn('SEDSNET_MAX_QUEUE_BUDGET "16384"', cmake)
         self.assertIn('SEDSNET_ENV_STARTING_QUEUE_SIZE "2048"', cmake)
         self.assertIn('SEDSNET_ENV_QUEUE_GROW_STEP "1.0"', cmake)
 
@@ -237,8 +237,8 @@ class QualificationContractTests(unittest.TestCase):
         thread = (root / "Core" / "Src" / "telemetry_thread.c").read_text(
             encoding="utf-8"
         )
-        self.assertIn("wire_time_ms + 50U", uart)
-        self.assertIn("telemetry_uart_reply_next_data_frame();", uart)
+        self.assertIn("wire_ms + 50U", uart)
+        self.assertIn("HAL_UART_Transmit_DMA", uart)
         flush = uart.split("static void telemetry_uart_flush_tx_queue", 1)[1]
         flush = flush.split("SedsResult telemetry_uart_init", 1)[0]
         self.assertNotIn("while (g_telemetry_uart.tx_count", flush)

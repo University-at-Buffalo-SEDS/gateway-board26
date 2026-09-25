@@ -43,6 +43,8 @@ typedef struct {
   uint32_t telemetry_deserialize_ok_count;
   uint32_t telemetry_deserialize_fail_count;
   uint32_t tx_frame_count;
+  uint32_t tx_enqueued, tx_pending, tx_high_water;
+  uint32_t tx_rejected, tx_retries, tx_exhausted;
 } TelemetryUartStats;
 
 SedsResult telemetry_uart_init(UART_HandleTypeDef *huart);

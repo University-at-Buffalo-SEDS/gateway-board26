@@ -48,11 +48,15 @@ typedef struct {
   size_t nested_expected;
   size_t nested_discard_remaining;
 
-  uint8_t tx_payloads[TELEMETRY_UART_QUEUE_DEPTH][TELEMETRY_UART_PAYLOAD_CAPACITY];
+  uint8_t tx_payloads[TELEMETRY_UART_QUEUE_DEPTH][TELEMETRY_UART_FRAME_SIZE];
   size_t tx_lengths[TELEMETRY_UART_QUEUE_DEPTH];
   uint8_t tx_head;
   uint8_t tx_tail;
-  uint8_t tx_count;
+  volatile uint8_t tx_count;
+  volatile uint8_t tx_active;
+  volatile uint8_t tx_error;
+  uint8_t tx_attempts;
+  uint32_t tx_started_ms;
 
   uint32_t tx_frame_count;
   uint8_t rx_dma_active;
@@ -86,6 +90,11 @@ volatile uint32_t g_sim_uart_rx_start_ok = 0U;
 volatile uint32_t g_sim_uart_rx_start_fail __attribute__((used)) = 0U;
 #endif
 volatile uint32_t g_gateway_uart_tx_queue_drops = 0U;
+volatile uint32_t g_gateway_uart_tx_enqueued = 0U;
+volatile uint32_t g_gateway_uart_tx_pending = 0U;
+volatile uint32_t g_gateway_uart_tx_high_water = 0U;
+volatile uint32_t g_gateway_uart_tx_retry_count = 0U;
+volatile uint32_t g_gateway_uart_tx_exhausted = 0U;
 volatile uint32_t g_sim_uart_umbilical_status_count = 0U;
 #ifdef SEDS_FIRMWARE_SIM_TEST
 volatile uint32_t g_sim_uart_umbilical_status_tx_count = 0U;
@@ -492,113 +501,115 @@ static void telemetry_uart_rx_push_byte(uint8_t byte) {
   telemetry_uart_reset_rx();
 }
 
-static void telemetry_uart_write_frame(uint8_t magic, const uint8_t *payload, size_t len) {
-  uint8_t frame[TELEMETRY_UART_FRAME_SIZE];
-  size_t frame_len = 0U;
-
-  if (g_telemetry_uart.huart == NULL) {
-    return;
+/* Called with IRQs masked. DMA owns the head slot until UART TC, not
+ * merely DMA transfer-complete. No router APIs or allocation in this path. */
+static void telemetry_uart_tx_kick_locked(void) {
+  if (g_telemetry_uart.tx_active || g_telemetry_uart.tx_error ||
+      !g_telemetry_uart.tx_count || !g_telemetry_uart.huart) return;
+  const unsigned slot = g_telemetry_uart.tx_head;
+  g_telemetry_uart.tx_started_ms = HAL_GetTick();
+  g_telemetry_uart.tx_active = 1U;
+  const HAL_StatusTypeDef status = HAL_UART_Transmit_DMA(
+      g_telemetry_uart.huart, g_telemetry_uart.tx_payloads[slot],
+      (uint16_t)g_telemetry_uart.tx_lengths[slot]);
+  if (status != HAL_OK) {
+    g_telemetry_uart.tx_active = 0U;
+    g_telemetry_uart.tx_error = 1U;
   }
-
-  len = telemetry_uart_clamp_payload_len(len);
-  frame_len = telemetry_uart_build_frame(frame, magic, payload, len);
-  const uint32_t baud = g_telemetry_uart.huart->Init.BaudRate;
-  const uint32_t wire_time_ms = (baud != 0U)
-                                    ? (uint32_t)(((frame_len * 10000U) + baud - 1U) / baud)
-                                    : 100U;
-  if (HAL_UART_Transmit(g_telemetry_uart.huart, frame, (uint16_t)frame_len,
-                        wire_time_ms + 50U) == HAL_OK) {
-    g_telemetry_uart.tx_frame_count++;
-    g_gateway_uart_tx_frames++;
-    gateway_status_observe(GW_STATUS_UART_SENT, payload, len,
-                           SEDS_DT_UMBILICAL_STATUS, tx_time_get());
-  } else {
-    g_gateway_uart_tx_failures++;
-    gateway_status_observe(GW_STATUS_UART_FAILED, payload, len,
-                           SEDS_DT_UMBILICAL_STATUS, tx_time_get());
-  }
-#ifdef SEDS_FIRMWARE_SIM_TEST
-  if ((magic == TELEMETRY_UART_REQ_DATA_MAGIC ||
-       magic == TELEMETRY_UART_RESP_DATA_MAGIC) &&
-      payload != NULL &&
-      sim_probe_packed_data_type(payload, len) ==
-          (uint32_t)SEDS_DT_UMBILICAL_STATUS) {
-    g_sim_uart_umbilical_status_count++;
-  }
-#endif
 }
 
-static UNUSED_FUNCTION uint8_t telemetry_uart_queue_push(const uint8_t *bytes, size_t len) {
-  uint32_t primask;
-  uint8_t slot;
-
-  if (bytes == NULL || len == 0U) {
-    return 0U;
-  }
-
-  len = telemetry_uart_clamp_payload_len(len);
-  if (len == 0U) {
-    return 0U;
-  }
-
-  primask = telemetry_uart_irq_save();
-
-  if (g_telemetry_uart.tx_count >= TELEMETRY_UART_QUEUE_DEPTH) {
+static uint8_t telemetry_uart_enqueue_frame(uint8_t magic,
+                                            const uint8_t *payload, size_t len) {
+  if (len > TELEMETRY_UART_PAYLOAD_CAPACITY || (len && !payload)) return 0U;
+  const uint32_t primask = telemetry_uart_irq_save();
+  if (g_telemetry_uart.tx_count == TELEMETRY_UART_QUEUE_DEPTH) {
+    g_gateway_uart_tx_queue_drops++; /* Rejected; router retains reliable data. */
     telemetry_uart_irq_restore(primask);
-    /* Apply real transport backpressure in thread context instead of dropping
-     * the discovery/topology frame that teaches GroundStation about boards
-     * behind this bridge. The elapsed UART write also makes the router's
-     * millisecond processing budget effective. */
-    telemetry_uart_reply_next_data_frame();
-    primask = telemetry_uart_irq_save();
-    if (g_telemetry_uart.tx_count >= TELEMETRY_UART_QUEUE_DEPTH) {
-      g_gateway_uart_tx_queue_drops++;
-      telemetry_uart_irq_restore(primask);
-      return 0U;
-    }
+    return 0U;
   }
-
-  slot = g_telemetry_uart.tx_tail;
-  memcpy(g_telemetry_uart.tx_payloads[slot], bytes, len);
-  g_telemetry_uart.tx_lengths[slot] = len;
-  g_telemetry_uart.tx_tail = (uint8_t)((slot + 1U) % TELEMETRY_UART_QUEUE_DEPTH);
+  const unsigned slot = g_telemetry_uart.tx_tail;
+  g_telemetry_uart.tx_lengths[slot] = telemetry_uart_build_frame(
+      g_telemetry_uart.tx_payloads[slot], magic, payload, len);
+  g_telemetry_uart.tx_tail = (slot + 1U) % TELEMETRY_UART_QUEUE_DEPTH;
   g_telemetry_uart.tx_count++;
-
+  g_gateway_uart_tx_enqueued++;
+  g_gateway_uart_tx_pending = g_telemetry_uart.tx_count;
+  if (g_gateway_uart_tx_pending > g_gateway_uart_tx_high_water)
+    g_gateway_uart_tx_high_water = g_gateway_uart_tx_pending;
+  telemetry_uart_tx_kick_locked();
   telemetry_uart_irq_restore(primask);
   return 1U;
 }
 
-static size_t telemetry_uart_queue_pop(uint8_t *out) {
-  uint32_t primask;
-  uint8_t slot;
-  size_t len;
-
-  if (out == NULL) {
-    return 0U;
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart) {
+  if (huart != g_telemetry_uart.huart) return;
+  const uint32_t primask = telemetry_uart_irq_save();
+  if (g_telemetry_uart.tx_active && !g_telemetry_uart.tx_error) {
+    const unsigned slot = g_telemetry_uart.tx_head;
+    gateway_status_observe(GW_STATUS_UART_SENT,
+        g_telemetry_uart.tx_payloads[slot] + TELEMETRY_UART_HEADER_SIZE,
+        g_telemetry_uart.tx_lengths[slot] - TELEMETRY_UART_HEADER_SIZE,
+        SEDS_DT_UMBILICAL_STATUS, tx_time_get());
+#ifdef SEDS_FIRMWARE_SIM_TEST
+    if (sim_probe_packed_data_type(g_telemetry_uart.tx_payloads[slot] + TELEMETRY_UART_HEADER_SIZE)
+        == (uint32_t)SEDS_DT_UMBILICAL_STATUS) g_sim_uart_umbilical_status_count++;
+#endif
+    g_telemetry_uart.tx_active = 0U;
+    g_telemetry_uart.tx_head = (g_telemetry_uart.tx_head + 1U) % TELEMETRY_UART_QUEUE_DEPTH;
+    g_telemetry_uart.tx_count--;
+    g_telemetry_uart.tx_attempts = 0U;
+    g_gateway_uart_tx_pending = g_telemetry_uart.tx_count;
+    g_telemetry_uart.tx_frame_count++;
+    g_gateway_uart_tx_frames++;
+    /* Chain immediately: no one-frame-per-thread-wakeup ceiling. */
+    telemetry_uart_tx_kick_locked();
   }
-
-  primask = telemetry_uart_irq_save();
-
-  if (g_telemetry_uart.tx_count == 0U) {
-    telemetry_uart_irq_restore(primask);
-    return 0U;
-  }
-
-  slot = g_telemetry_uart.tx_head;
-  len = g_telemetry_uart.tx_lengths[slot];
-  memcpy(out, g_telemetry_uart.tx_payloads[slot], len);
-
-  g_telemetry_uart.tx_head = (uint8_t)((slot + 1U) % TELEMETRY_UART_QUEUE_DEPTH);
-  g_telemetry_uart.tx_count--;
-
   telemetry_uart_irq_restore(primask);
-  return len;
 }
 
 static void telemetry_uart_flush_tx_queue(void) {
-  if (g_telemetry_uart.tx_count != 0U) {
-    telemetry_uart_reply_next_data_frame();
+  uint32_t primask = telemetry_uart_irq_save();
+  if (g_telemetry_uart.tx_count) {
+    const unsigned slot = g_telemetry_uart.tx_head;
+    const uint32_t baud = g_telemetry_uart.huart->Init.BaudRate;
+    const uint32_t wire_ms = baud ?
+        (g_telemetry_uart.tx_lengths[slot] * 10000U + baud - 1U) / baud : 100U;
+    if (g_telemetry_uart.tx_error ||
+        (g_telemetry_uart.tx_active &&
+         (uint32_t)(HAL_GetTick() - g_telemetry_uart.tx_started_ms) > wire_ms + 50U)) {
+      /* Synchronous abort disables DMA before the slot can be reused. It does
+       * not wait for wire transmission. Retry at most twice, then count loss.
+       * A partial frame may also invalidate a retry at the peer; wire CRC and
+       * SEDSNet reliability remain responsible for end-to-end recovery. */
+      g_telemetry_uart.tx_error = 1U; /* Completion must not release the slot. */
+      telemetry_uart_irq_restore(primask);
+      const HAL_StatusTypeDef abort_status = HAL_UART_AbortTransmit(g_telemetry_uart.huart);
+      primask = telemetry_uart_irq_save();
+      if (abort_status != HAL_OK) {
+        /* DMA ownership is uncertain: retain the buffer and retry abort next
+         * service. Never recycle memory that hardware may still be reading. */
+        g_gateway_uart_tx_failures++;
+        telemetry_uart_irq_restore(primask);
+        return;
+      }
+      g_telemetry_uart.tx_active = 0U;
+      g_telemetry_uart.tx_error = 0U;
+      g_gateway_uart_tx_failures++;
+      gateway_status_observe(GW_STATUS_UART_FAILED,
+          g_telemetry_uart.tx_payloads[slot] + TELEMETRY_UART_HEADER_SIZE,
+          g_telemetry_uart.tx_lengths[slot] - TELEMETRY_UART_HEADER_SIZE,
+          SEDS_DT_UMBILICAL_STATUS, tx_time_get());
+      if (++g_telemetry_uart.tx_attempts >= 3U) {
+        g_gateway_uart_tx_exhausted++;
+        g_telemetry_uart.tx_head = (slot + 1U) % TELEMETRY_UART_QUEUE_DEPTH;
+        g_telemetry_uart.tx_count--;
+        g_telemetry_uart.tx_attempts = 0U;
+        g_gateway_uart_tx_pending = g_telemetry_uart.tx_count;
+      } else g_gateway_uart_tx_retry_count++;
+    }
   }
+  telemetry_uart_tx_kick_locked();
+  telemetry_uart_irq_restore(primask);
 }
 
 SedsResult telemetry_uart_init(UART_HandleTypeDef *huart) {
@@ -657,14 +668,16 @@ SedsResult telemetry_uart_tx_send(const uint8_t *bytes, size_t len, void *user) 
   }
 #endif
 
-  if (!telemetry_uart_queue_push(bytes, len)) return SEDS_IO;
+  if (!telemetry_uart_enqueue_frame(TELEMETRY_UART_REQ_DATA_MAGIC, bytes, len)) return SEDS_IO;
+  const uint32_t primask = telemetry_uart_irq_save();
   gateway_status_observe(GW_STATUS_UART_QUEUED, bytes, len,
                          SEDS_DT_UMBILICAL_STATUS, tx_time_get());
+  telemetry_uart_irq_restore(primask);
   return SEDS_OK;
 }
 
 void telemetry_uart_send_data_frame(const uint8_t *payload, size_t len) {
-  telemetry_uart_write_frame(TELEMETRY_UART_REQ_DATA_MAGIC, payload, len);
+  (void)telemetry_uart_enqueue_frame(TELEMETRY_UART_REQ_DATA_MAGIC, payload, len);
 }
 
 void telemetry_uart_send_command_frame(const char *text) {
@@ -681,18 +694,17 @@ void telemetry_uart_send_command_frame(const char *text) {
         memcpy(payload, text, text_len);
       }
       payload[text_len] = '\n';
-      telemetry_uart_write_frame(TELEMETRY_UART_REQ_COMMAND_MAGIC, payload, len);
+      (void)telemetry_uart_enqueue_frame(TELEMETRY_UART_REQ_COMMAND_MAGIC, payload, len);
       return;
     }
   }
 
-  telemetry_uart_write_frame(TELEMETRY_UART_REQ_COMMAND_MAGIC, NULL, 0U);
+  (void)telemetry_uart_enqueue_frame(TELEMETRY_UART_REQ_COMMAND_MAGIC, NULL, 0U);
 }
 
 void telemetry_uart_reply_next_data_frame(void) {
-  uint8_t payload[TELEMETRY_UART_PAYLOAD_CAPACITY];
-  const size_t len = telemetry_uart_queue_pop(payload);
-  telemetry_uart_send_data_frame(payload, len);
+  /* Compatibility poll: data is already streamed by DMA when queued. */
+  telemetry_uart_flush_tx_queue();
 }
 
 uint32_t telemetry_uart_tx_frame_count(void) {
@@ -706,6 +718,12 @@ void telemetry_uart_get_stats(TelemetryUartStats *out) {
 
   *out = g_telemetry_uart.stats;
   out->tx_frame_count = g_telemetry_uart.tx_frame_count;
+  out->tx_enqueued = g_gateway_uart_tx_enqueued;
+  out->tx_pending = g_gateway_uart_tx_pending;
+  out->tx_high_water = g_gateway_uart_tx_high_water;
+  out->tx_rejected = g_gateway_uart_tx_queue_drops;
+  out->tx_retries = g_gateway_uart_tx_retry_count;
+  out->tx_exhausted = g_gateway_uart_tx_exhausted;
   out->rx_dma_active = g_telemetry_uart.rx_dma_active;
   out->rx_dma_start_ok_count = g_telemetry_uart.rx_dma_start_ok_count;
   out->rx_dma_start_busy_count = g_telemetry_uart.rx_dma_start_busy_count;
@@ -774,6 +792,7 @@ void telemetry_uart_handle_error(UART_HandleTypeDef *huart) {
     return;
   }
 
+  if (huart->ErrorCode & HAL_UART_ERROR_DMA) g_telemetry_uart.tx_error = 1U;
   g_telemetry_uart.stats.rx_hw_error_count++;
   g_gateway_uart_rx_hw_errors++;
   g_telemetry_uart.rx_dma_last_error_code = huart->ErrorCode;

@@ -217,11 +217,14 @@ void *telemetryMalloc(size_t xSize)
      * small-object pool. On the Gateway a live capture observed a 6152-byte
      * request fail with 6776 bytes free across 303 fragments. Reserving a
      * second pool is deterministic; trying to defragment a live ThreadX pool
-     * is neither safe nor supported. */
-    if (xSize >= 4096U && rust_emergency_byte_pool_external != NULL)
+     * is neither safe nor supported. Schema frames can be only 3.5 KiB, so
+     * isolate allocations from 1 KiB upward, not just those above 4 KiB.
+     * Never wait while holding the router lock: the same thread owns the
+     * temporary allocations that must be released to make progress. */
+    if (xSize >= 1024U && rust_emergency_byte_pool_external != NULL)
     {
         allocation_status = tx_byte_allocate(
-            rust_emergency_byte_pool_external, &ptr, xSize, 5);
+            rust_emergency_byte_pool_external, &ptr, xSize, TX_NO_WAIT);
         if (allocation_status == TX_SUCCESS)
         {
             g_telemetry_alloc_emergency_recoveries++;
@@ -229,13 +232,13 @@ void *telemetryMalloc(size_t xSize)
     }
     if (allocation_status != TX_SUCCESS)
     {
-        allocation_status = tx_byte_allocate(rust_byte_pool_external, &ptr, xSize, 5);
+        allocation_status = tx_byte_allocate(rust_byte_pool_external, &ptr, xSize, TX_NO_WAIT);
     }
-    if (allocation_status != TX_SUCCESS && xSize < 4096U &&
+    if (allocation_status != TX_SUCCESS && xSize < 1024U &&
         rust_emergency_byte_pool_external != NULL)
     {
         allocation_status = tx_byte_allocate(
-            rust_emergency_byte_pool_external, &ptr, xSize, 5);
+            rust_emergency_byte_pool_external, &ptr, xSize, TX_NO_WAIT);
         if (allocation_status == TX_SUCCESS)
         {
             g_telemetry_alloc_emergency_recoveries++;

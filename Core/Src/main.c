@@ -397,7 +397,10 @@ static void MX_USART2_UART_Init(void)
 
   /* USER CODE END USART2_Init 1 */
   huart2.Instance = USART2;
-  huart2.Init.BaudRate = 115200;
+#ifndef GATEWAY_PICO_UART_BAUD_RATE
+#define GATEWAY_PICO_UART_BAUD_RATE 115200U
+#endif
+  huart2.Init.BaudRate = GATEWAY_PICO_UART_BAUD_RATE;
   huart2.Init.WordLength = UART_WORDLENGTH_8B;
   huart2.Init.StopBits = UART_STOPBITS_1;
   huart2.Init.Parity = UART_PARITY_NONE;
