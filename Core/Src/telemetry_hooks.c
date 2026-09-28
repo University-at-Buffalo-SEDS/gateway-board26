@@ -213,15 +213,14 @@ void *telemetryMalloc(size_t xSize)
         g_telemetry_max_alloc_request = (uint32_t)xSize;
     }
 
-    /* Keep topology/schema serialization blocks away from the heavily churned
-     * small-object pool. On the Gateway a live capture observed a 6152-byte
-     * request fail with 6776 bytes free across 303 fragments. Reserving a
-     * second pool is deterministic; trying to defragment a live ThreadX pool
-     * is neither safe nor supported. Schema frames can be only 3.5 KiB, so
-     * isolate allocations from 1 KiB upward, not just those above 4 KiB.
-     * Never wait while holding the router lock: the same thread owns the
-     * temporary allocations that must be released to make progress. */
-    if (xSize >= 1024U && rust_emergency_byte_pool_external != NULL)
+    /* Reserve the contiguous pool for schema-sized allocations. A hardware
+     * restart capture found it occupied by eight retained 1.0--2.4 KiB blocks,
+     * leaving only 1264 bytes when a 3652-byte schema Arc was needed. The
+     * ordinary pool still had 7308 bytes, fragmented across 332 blocks.
+     * Put medium-lived queues/catalogs in the ordinary pool first; keep the
+     * large pool for >=3 KiB serialization scratch. Both directions retain
+     * nonblocking fallback; never wait while holding the router lock. */
+    if (xSize >= 3072U && rust_emergency_byte_pool_external != NULL)
     {
         allocation_status = tx_byte_allocate(
             rust_emergency_byte_pool_external, &ptr, xSize, TX_NO_WAIT);
@@ -234,7 +233,7 @@ void *telemetryMalloc(size_t xSize)
     {
         allocation_status = tx_byte_allocate(rust_byte_pool_external, &ptr, xSize, TX_NO_WAIT);
     }
-    if (allocation_status != TX_SUCCESS && xSize < 1024U &&
+    if (allocation_status != TX_SUCCESS && xSize < 3072U &&
         rust_emergency_byte_pool_external != NULL)
     {
         allocation_status = tx_byte_allocate(

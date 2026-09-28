@@ -29,6 +29,10 @@ static void telemetry_memory_profile_sample(void){}
 int main(void){
  assert(telemetryMalloc(3564)==&emergency); assert(n==1&&calls[0]==2);
  n=0; assert(telemetryMalloc(64)==&normal);assert(n==1&&calls[0]==1);
+ for (size_t size=1024;size<=2444;size+=284) {
+   n=0; assert(telemetryMalloc(size)==&normal); assert(n==1&&calls[0]==1);
+ }
+ n=0; assert(telemetryMalloc(3652)==&emergency); assert(n==1&&calls[0]==2);
  n=0;fail_first=1;assert(telemetryMalloc(3564)==&normal);assert(n==2&&calls[0]==2&&calls[1]==1);
  n=0;assert(telemetryMalloc(64)==&emergency);assert(n==2&&calls[0]==1&&calls[1]==2);
 }
