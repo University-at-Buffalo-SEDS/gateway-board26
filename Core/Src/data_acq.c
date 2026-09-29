@@ -18,6 +18,44 @@ static LTC2990_Handle_t ltc2990_current_handle;
 static uint8_t ltc2990_voltage_ready;
 static uint8_t ltc2990_current_ready;
 
+volatile uint32_t g_power_i2c_recoveries;
+volatile uint32_t g_power_i2c_recovery_failures;
+
+/* Sole I2C2 worker. Release a target left mid-byte by an MCU reset.
+ * NXP UM10204 bus clear: at most nine open-drain SCL pulses, then STOP. */
+static int power_i2c_recover(void)
+{
+    (void)HAL_I2C_DeInit(&hi2c2);
+    GPIO_InitTypeDef gpio = {0};
+    gpio.Pin = GPIO_PIN_8 | GPIO_PIN_9;
+    gpio.Mode = GPIO_MODE_OUTPUT_OD;
+    gpio.Pull = GPIO_NOPULL;
+    gpio.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_WritePin(GPIOA, gpio.Pin, GPIO_PIN_SET);
+    HAL_GPIO_Init(GPIOA, &gpio);
+    for (unsigned pulse = 0; pulse < 9; ++pulse) {
+        if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_8) == GPIO_PIN_SET) break;
+        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_9, GPIO_PIN_RESET);
+        tx_thread_sleep(1);
+        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_9, GPIO_PIN_SET);
+        tx_thread_sleep(1);
+        if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_9) != GPIO_PIN_SET) break;
+    }
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_9, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_RESET);
+    tx_thread_sleep(1);
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_9, GPIO_PIN_SET);
+    tx_thread_sleep(1);
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_SET);
+    tx_thread_sleep(1);
+    const int released = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_8) == GPIO_PIN_SET &&
+                         HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_9) == GPIO_PIN_SET;
+    const int initialized = HAL_I2C_Init(&hi2c2) == HAL_OK;
+    if (released && initialized) { g_power_i2c_recoveries++; return 1; }
+    g_power_i2c_recovery_failures++;
+    return 0;
+}
+
 static void data_acq_ltc2990_init(void)
 {
     ltc2990_voltage_ready =
@@ -52,9 +90,17 @@ void data_acq_thread_entry(ULONG initial_input)
 {
     (void)initial_input;
 
+    if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_8) != GPIO_PIN_SET ||
+        HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_9) != GPIO_PIN_SET) {
+        (void)power_i2c_recover();
+    }
     data_acq_ltc2990_init();
 
     for (;;) {
+        if (HAL_I2C_GetError(&hi2c2) != HAL_I2C_ERROR_NONE ||
+            !ltc2990_voltage_ready || !ltc2990_current_ready) {
+            if (power_i2c_recover()) data_acq_ltc2990_init();
+        }
         data_acq_report_power();
         // HAL_GPIO_TogglePin(GREEN_LED_GPIO_Port, GREEN_LED_Pin);
         tx_thread_sleep(DATA_ACQ_REPORT_PERIOD_TICKS);

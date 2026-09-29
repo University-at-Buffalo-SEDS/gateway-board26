@@ -11,6 +11,7 @@
 
 // Global LTC2990 handle definition for telemetry
 LTC2990_Handle_t ltc2990_handle;
+volatile uint32_t g_power_telemetry_drops;
 
 
 static inline void sleep_ms(uint32_t ms)
@@ -241,11 +242,12 @@ void telemetry_ltc2990_update_voltage(LTC2990_Handle_t *ltc2990_handle) {
     LTC2990_Step(ltc2990_handle);
     LTC2990_Get_Voltage(ltc2990_handle, voltages);
     float voltage = (voltages[0] * VBATT_DIVIDER_GAIN) - VBATT_OFFSET_V;
+    if (!isfinite(voltage)) return;
 
 
     SedsResult res = log_telemetry_asynchronous(SEDS_DT_BATTERY_VOLTAGE, &voltage, 1, sizeof(float));
     if (res != SEDS_OK) {
-        Error_Handler();
+        g_power_telemetry_drops++;
     }
 }
 
@@ -256,13 +258,13 @@ void telemetry_ltc2990_update_current(LTC2990_Handle_t *ltc2990_handle) {
     LTC2990_Get_Voltage(ltc2990_handle, current);
     float current_value = current[CURRENT_TELEMETRY_CHANNEL_INDEX] * CURRENT_DRAW_POLARITY;
 
-    if (isnan(current_value)) {
+    if (!isfinite(current_value)) {
         return;
     }
 
 
     SedsResult res = log_telemetry_asynchronous(SEDS_DT_BATTERY_CURRENT, &current_value, 1, sizeof(float));
     if (res != SEDS_OK) {
-        Error_Handler();
+        g_power_telemetry_drops++;
     }
 }
