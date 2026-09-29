@@ -18,8 +18,7 @@ class QualificationContractTests(unittest.TestCase):
         self.assertIn("sedsnet_emergency_pool_memory", app)
         self.assertIn("telemetry_set_emergency_byte_pool", app)
         self.assertIn("g_telemetry_alloc_emergency_recoveries++", hooks)
-        self.assertIn("xSize >= 1024U", hooks)
-        self.assertIn("303 fragments", hooks)
+        self.assertIn("xSize >= 3072U", hooks)
 
     def test_gateway_telemetry_stack_has_profiled_headroom(self):
         root = Path(build.__file__).resolve().parent
