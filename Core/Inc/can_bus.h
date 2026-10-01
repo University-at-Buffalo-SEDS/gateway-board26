@@ -26,6 +26,9 @@ HAL_StatusTypeDef can_bus_send_large(const uint8_t *bytes, size_t len, uint32_t 
 void can_bus_process_rx(void);
 /* Bounded service for interleaving command ingress and router acknowledgements. */
 uint32_t can_bus_process_rx_budget(uint32_t max_frames);
+/* Deadline checked after each frame; one synchronous callback can overrun it. */
+uint32_t can_bus_process_rx_for(uint32_t max_frames, uint32_t max_ms);
+uint32_t can_bus_rx_pending(void);
 
 /* Number of frames rejected because the ISR-to-thread ring was full. */
 uint32_t can_bus_rx_dropped_frames(void);

@@ -1,3 +1,6 @@
+#ifdef TELEMETRY_USE_TLSF
+#include "telemetry_tlsf.h"
+#endif
 // telemetry.c
 #include "telemetry.h"
 #include "flight_state_cache.h"
@@ -203,6 +206,7 @@ void telemetry_uart_handle_data(const uint8_t *payload, size_t len) {
     return;
   }
 
+  const size_t rejected_before = seds_memory_admission_rejected();
   telemetry_lock();
   if (telemetry_uart_side_id() >= 0) {
     result = seds_router_receive_packed_from_side(
@@ -212,6 +216,7 @@ void telemetry_uart_handle_data(const uint8_t *payload, size_t len) {
   }
   telemetry_unlock();
 
+  if (result != SEDS_OK && seds_memory_admission_rejected() != rejected_before) return;
   if (result != SEDS_OK) {
     telemetry_uart_note_deserialize_result(0U);
     (void)log_error_asynchronous("UART enqueue failed: %d len=%u\r\n", (int)result,
@@ -677,6 +682,9 @@ static SedsResult init_telemetry_router_locked(void) {
    * its side id to the router, which preserves the packed frame and never
    * forwards it back to its ingress side. Endpoint reachability is learned by
    * discovery; the gateway must not advertise remote endpoints as local. */
+#ifdef TELEMETRY_USE_TLSF
+  seds_set_memory_admission_probe(telemetry_tlsf_admit);
+#endif
   r = seds_router_new(node_now_since_ms, NULL, NULL, 0U);
   if (!r) {
     printf("Error: failed to create router\r\n");
@@ -911,7 +919,7 @@ SedsResult dispatch_tx_queue_timeout(uint32_t timeout_ms) {
 
   telemetry_lock();
   const SedsResult result =
-      seds_router_process_tx_queue_with_timeout(g_router.r, timeout_ms);
+      seds_router_dispatch_tx_queue_with_timeout(g_router.r, timeout_ms);
   telemetry_unlock();
   return result;
 #endif

@@ -738,7 +738,7 @@ HAL_StatusTypeDef can_bus_send_large(const uint8_t *bytes, size_t len,
 // Call this periodically from thread/main-loop context.
 // It drains the ISR ring buffer, expires old partial reassembly slots,
 // reassembles fragmented messages, and notifies subscribers.
-uint32_t can_bus_process_rx_budget(uint32_t max_frames) {
+uint32_t can_bus_process_rx_for(uint32_t max_frames, uint32_t max_ms) {
   uint32_t now = HAL_GetTick();
   reasm_expire_old(now);
 
@@ -759,8 +759,21 @@ uint32_t can_bus_process_rx_budget(uint32_t max_frames) {
     if (!rb_pop(&f))
       break;
     handle_rx_frame(&f, HAL_GetTick());
+    if (max_ms != 0U && (uint32_t)(HAL_GetTick() - now) >= max_ms) {
+      ++processed;
+      break;
+    }
   }
   return processed;
+}
+
+uint32_t can_bus_process_rx_budget(uint32_t max_frames) {
+  return can_bus_process_rx_for(max_frames, 0U);
+}
+
+uint32_t can_bus_rx_pending(void) {
+  const uint16_t head = g_rx_head, tail = g_rx_tail;
+  return head >= tail ? head - tail : CAN_BUS_RX_RING_DEPTH - tail + head;
 }
 
 void can_bus_process_rx(void) {

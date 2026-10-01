@@ -12,6 +12,8 @@ volatile uint32_t g_telemetry_tlsf_init_failed;
 volatile uint32_t g_telemetry_tlsf_region_bytes;
 volatile uint32_t g_telemetry_tlsf_control_bytes;
 volatile uint32_t g_telemetry_tlsf_live_bytes;
+static uint32_t live_allocations;
+volatile uint32_t g_gateway_memory_admission_drops;
 volatile uint32_t g_telemetry_tlsf_peak_bytes;
 volatile uint32_t g_telemetry_tlsf_failure_request;
 volatile uint32_t g_telemetry_tlsf_failures;
@@ -94,6 +96,7 @@ void *telemetry_tlsf_malloc(size_t size)
     if (initialize() && size <= tlsf_block_size_max() - 64U)
         ptr = tlsf_memalign(allocator, 8U, size ? size : 1U);
     if (ptr) {
+        ++live_allocations;
         g_telemetry_tlsf_live_bytes += tlsf_block_size(ptr);
         if (g_telemetry_tlsf_live_bytes > g_telemetry_tlsf_peak_bytes)
             g_telemetry_tlsf_peak_bytes = g_telemetry_tlsf_live_bytes;
@@ -110,6 +113,7 @@ void telemetry_tlsf_free(void *ptr)
     if (!ptr) return;
     const uint32_t saved = __get_PRIMASK();
     __disable_irq();
+    --live_allocations;
     g_telemetry_tlsf_live_bytes -= tlsf_block_size(ptr);
     tlsf_free(allocator, ptr);
     __set_PRIMASK(saved);
@@ -121,4 +125,29 @@ void telemetry_tlsf_sample(void)
     __disable_irq();
     snapshot();
     __set_PRIMASK(saved);
+}
+
+/* Reserve scratch space for dispatch/ACKs. Large work also checks the largest
+ * real hole, because total free bytes alone cannot detect fragmentation.
+ * Small telemetry uses a conservative O(1) occupancy estimate. */
+bool telemetry_tlsf_admit(size_t additional, size_t largest)
+{
+    const uint32_t saved = __get_PRIMASK();
+    __disable_irq();
+    bool allowed = initialize() != 0;
+    const size_t reserve = additional <= 512U ? 512U : 4096U;
+    size_t occupied = (size_t)g_telemetry_tlsf_live_bytes +
+        ((size_t)live_allocations + region_count) * 2U * sizeof(void *);
+    size_t available = g_telemetry_tlsf_region_bytes > occupied ?
+        g_telemetry_tlsf_region_bytes - occupied : 0U;
+    if (allowed && largest >= 512U) {
+        snapshot();
+        available = g_telemetry_tlsf_free_bytes;
+        allowed = largest <= g_telemetry_tlsf_largest_free &&
+            g_telemetry_tlsf_largest_free - largest >= 64U;
+    }
+    allowed = allowed && additional <= available && reserve <= available - additional;
+    if (!allowed) ++g_gateway_memory_admission_drops;
+    __set_PRIMASK(saved);
+    return allowed;
 }
