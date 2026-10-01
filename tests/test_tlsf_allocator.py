@@ -76,6 +76,13 @@ int main(int argc,char**argv){
    if(items[i]){assert(((uintptr_t)items[i]&7)==0);memset(items[i],i+1,sizes[i]);}
   }
   assert(mock_irq==0);
+  if ((step & 255U) == 0U) {
+   size_t request=512U+rng%8192U;
+   if (telemetry_tlsf_admit(request,request)) {
+    void *scratch=telemetry_tlsf_malloc(request);
+    assert(scratch);telemetry_tlsf_free(scratch);
+   }
+  }
  }
  for(unsigned i=0;i<64;i++)telemetry_tlsf_free(items[i]);
  assert(g_telemetry_tlsf_live_bytes==0&&g_telemetry_tlsf_peak_bytes>0);

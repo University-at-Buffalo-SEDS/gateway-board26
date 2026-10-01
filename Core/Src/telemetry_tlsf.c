@@ -143,8 +143,12 @@ bool telemetry_tlsf_admit(size_t additional, size_t largest)
     if (allowed && largest >= 512U) {
         snapshot();
         available = g_telemetry_tlsf_free_bytes;
+        /* TLSF rounds searches to one of 32 subdivisions per power of two;
+         * memalign also needs a leading-block gap. A fixed 64-byte margin is
+         * insufficient for larger requests even when the raw hole looks big. */
+        const size_t margin = largest / 32U + 64U;
         allowed = largest <= g_telemetry_tlsf_largest_free &&
-            g_telemetry_tlsf_largest_free - largest >= 64U;
+            g_telemetry_tlsf_largest_free - largest >= margin;
     }
     allowed = allowed && additional <= available && reserve <= available - additional;
     if (!allowed) ++g_gateway_memory_admission_drops;
