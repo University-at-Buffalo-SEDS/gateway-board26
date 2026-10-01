@@ -12,7 +12,7 @@
 //  - Uses CAN FD frames for fragmentation (default payload 64 bytes).
 //  - Fragment frames are distinguished by a small "magic" header in the
 //  payload.
-//  - Reassembly is bounded (no malloc). Oldest RX frames are dropped on ring
+//  - Reassembly is bounded (no malloc). Incoming RX frames are dropped on ring
 //  overflow.
 //  - One producer (ISR) and one consumer (thread calling can_bus_process_rx()).
 //  - You can call can_bus_process_rx() from a ThreadX thread, or main
@@ -26,6 +26,7 @@
 
 #include "can_bus.h"
 #include "main.h"
+#include "can_rx_admission.h"
 #include <stdint.h>
 #include <string.h>
 
@@ -188,6 +189,7 @@ static volatile uint16_t g_rx_head = 0;
 static volatile uint16_t g_rx_tail = 0;
 static volatile uint32_t g_rx_dropped_frames = 0;
 volatile uint32_t g_fdcan_rx_count = 0;
+volatile uint32_t g_can_rx_bulk_dropped = 0;
 volatile uint32_t g_fdcan_rx_hw_overflow_count = 0;
 volatile uint32_t g_fdcan_init_error_count = 0;
 volatile uint32_t g_fdcan_tx_ok_count = 0;
@@ -249,8 +251,7 @@ static inline int __attribute__((unused)) rb_is_empty(void) {
 
 static inline int rb_is_full(void) { return rb_next(g_rx_head) == g_rx_tail; }
 
-// Push frame from ISR. Drop-oldest on overflow (hybrid “stay current”
-// behavior).
+// Push frame from ISR. Drop incoming frames on overflow.
 //
 // Memory ordering:
 //  - We must ensure slot writes are visible before publishing head.
@@ -258,6 +259,16 @@ static inline int rb_is_full(void) { return rb_next(g_rx_head) == g_rx_tail; }
 static inline void rb_push(uint32_t std_id, const uint8_t *data, uint8_t len) {
   if (len > 64)
     len = 64;
+
+  const uint16_t head = g_rx_head, tail = g_rx_tail;
+  const unsigned occupied = head >= tail ? head - tail :
+      CAN_BUS_RX_RING_DEPTH - tail + head;
+  if (occupied >= CAN_BUS_RX_RING_DEPTH - 1U - 8U &&
+      can_rx_is_bulk_loadcell(data, len)) {
+    g_can_rx_bulk_dropped++;
+    g_rx_dropped_frames++;
+    return;
+  }
 
   if (rb_is_full()) {
     g_rx_dropped_frames++;
