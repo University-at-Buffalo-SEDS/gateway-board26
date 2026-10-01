@@ -42,6 +42,7 @@ endif()
 
 # Create an executable object type
 add_executable(${CMAKE_PROJECT_NAME})
+include(cmake/tlsf_allocator.cmake)
 
 # Both the gateway and its Pico-Fi peer must use the same UART baud rate.
 set(GATEWAY_PICO_UART_BAUD_RATE 115200 CACHE STRING "Gateway-to-Pico-Fi UART baud rate")
