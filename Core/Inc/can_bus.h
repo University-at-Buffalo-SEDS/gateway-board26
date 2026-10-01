@@ -24,6 +24,8 @@ HAL_StatusTypeDef can_bus_send_large(const uint8_t *bytes, size_t len, uint32_t 
  * This drains the ISR RX ring, performs reassembly, and invokes subscribers.
  */
 void can_bus_process_rx(void);
+/* Bounded service for interleaving command ingress and router acknowledgements. */
+uint32_t can_bus_process_rx_budget(uint32_t max_frames);
 
 /* Number of frames rejected because the ISR-to-thread ring was full. */
 uint32_t can_bus_rx_dropped_frames(void);

@@ -25,6 +25,8 @@ TX_THREAD router_test_thread;
 #define ROUTER_TEST_THREAD_STACK_SIZE (8U * 1024U)
 #define TELEMETRY_QUEUE_SERVICE_BUDGET_MS 1U
 #define TELEMETRY_THREAD_SLEEP_TICKS 1U
+#define TELEMETRY_CAN_FRAMES_PER_SLICE 8U
+#define TELEMETRY_CAN_SLICES_PER_PASS 6U
 
 volatile uint32_t g_telemetry_stack_remaining = TELEMETRY_THREAD_STACK_SIZE;
 volatile uint32_t g_gateway_telemetry_loop_count = 0U;
@@ -68,7 +70,16 @@ void telemetry_thread_entry(ULONG initial_input)
 #ifdef TELEMETRY_BOARD_LINK_UART
         board_link_uart_process();
 #endif
-        can_bus_process_rx();
+        /* The loaded gateway completed only about four main passes per second.
+         * Service commands and queued ACKs between small CAN slices, preserving
+         * the 48-frame pass limit and the scheduler yield below. */
+        for (uint32_t slice = 0U; slice < TELEMETRY_CAN_SLICES_PER_PASS; ++slice) {
+            const uint32_t received =
+                can_bus_process_rx_budget(TELEMETRY_CAN_FRAMES_PER_SLICE);
+            telemetry_uart_process();
+            (void)process_all_queues_timeout(TELEMETRY_QUEUE_SERVICE_BUDGET_MS);
+            if (received < TELEMETRY_CAN_FRAMES_PER_SLICE) break;
+        }
         (void)telemetry_poll_discovery();
         (void)telemetry_poll_timesync();
         ota_stream_poll();
