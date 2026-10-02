@@ -25,6 +25,8 @@
 #define TELEMETRY_UART_HEADER_SIZE 4U
 #define TELEMETRY_UART_RX_DMA_BUF_SIZE 512U
 #define TELEMETRY_UART_RX_RING_DEPTH 8U
+#define TELEMETRY_UART_RX_SERVICE_BYTES 512U
+#define TELEMETRY_UART_RX_SERVICE_MS 1U
 #define UNUSED_FUNCTION __attribute__((unused))
 
 typedef struct {
@@ -39,6 +41,7 @@ typedef struct {
   volatile uint32_t rx_head;
   volatile uint32_t rx_tail;
   volatile uint32_t rx_count;
+  uint16_t rx_item_offset;
   uint8_t rx_frame[TELEMETRY_UART_FRAME_SIZE];
   size_t rx_fill;
   size_t rx_expected;
@@ -192,18 +195,23 @@ static void telemetry_uart_rx_ring_push_isr(const uint8_t *data, uint16_t len) {
   g_telemetry_uart.rx_count++;
 }
 
-static uint8_t telemetry_uart_rx_ring_pop(TelemetryUartRxItem *out) {
+/* Consume one byte without releasing a partially processed DMA chunk. This
+ * lets the foreground yield to CAN at its deadline and resume losslessly. */
+static uint8_t telemetry_uart_rx_ring_pop_byte(uint8_t *out) {
   uint8_t have = 0U;
   const uint32_t primask = telemetry_uart_irq_save();
-
   if (out != NULL && g_telemetry_uart.rx_count > 0U) {
-    *out = g_telemetry_uart.rx_ring[g_telemetry_uart.rx_head];
-    g_telemetry_uart.rx_head =
-        (g_telemetry_uart.rx_head + 1U) % TELEMETRY_UART_RX_RING_DEPTH;
-    g_telemetry_uart.rx_count--;
+    const TelemetryUartRxItem *item =
+        &g_telemetry_uart.rx_ring[g_telemetry_uart.rx_head];
+    *out = item->data[g_telemetry_uart.rx_item_offset++];
+    if (g_telemetry_uart.rx_item_offset == item->len) {
+      g_telemetry_uart.rx_item_offset = 0U;
+      g_telemetry_uart.rx_head =
+          (g_telemetry_uart.rx_head + 1U) % TELEMETRY_UART_RX_RING_DEPTH;
+      g_telemetry_uart.rx_count--;
+    }
     have = 1U;
   }
-
   telemetry_uart_irq_restore(primask);
   return have;
 }
@@ -277,7 +285,8 @@ static uint8_t telemetry_uart_second_magic(uint8_t magic) {
 static size_t telemetry_uart_build_frame(uint8_t *frame, uint8_t magic, const uint8_t *payload, size_t len) {
   len = telemetry_uart_clamp_payload_len(len);
 
-  memset(frame, 0, TELEMETRY_UART_FRAME_SIZE);
+  /* Only header + payload are transmitted; clearing all 1028 bytes under
+   * the enqueue IRQ mask adds work for every small telemetry packet. */
   frame[0] = magic;
   frame[1] = telemetry_uart_second_magic(magic);
   frame[2] = (uint8_t)(len & 0xFFU);
@@ -627,20 +636,26 @@ SedsResult telemetry_uart_init(UART_HandleTypeDef *huart) {
 }
 
 void telemetry_uart_process(void) {
-  TelemetryUartRxItem item;
+  uint8_t byte;
+  unsigned serviced = 0U;
+  const uint32_t started = HAL_GetTick();
 
 #ifdef SEDS_FIRMWARE_SIM_TEST
-  while (__HAL_UART_GET_FLAG(g_telemetry_uart.huart, UART_FLAG_RXNE) != RESET) {
+  while (serviced < TELEMETRY_UART_RX_SERVICE_BYTES &&
+         (uint32_t)(HAL_GetTick() - started) < TELEMETRY_UART_RX_SERVICE_MS &&
+         __HAL_UART_GET_FLAG(g_telemetry_uart.huart, UART_FLAG_RXNE) != RESET) {
     const uint8_t byte = (uint8_t)READ_REG(g_telemetry_uart.huart->Instance->RDR);
     g_sim_uart_rx_irq_bytes++;
     telemetry_uart_process_rx_byte(byte);
+    ++serviced;
   }
 #endif
 
-  while (telemetry_uart_rx_ring_pop(&item)) {
-    for (size_t idx = 0U; idx < (size_t)item.len; ++idx) {
-      telemetry_uart_process_rx_byte(item.data[idx]);
-    }
+  while (serviced < TELEMETRY_UART_RX_SERVICE_BYTES &&
+         (uint32_t)(HAL_GetTick() - started) < TELEMETRY_UART_RX_SERVICE_MS &&
+         telemetry_uart_rx_ring_pop_byte(&byte)) {
+    telemetry_uart_process_rx_byte(byte);
+    ++serviced;
   }
 
   if (g_telemetry_uart.rx_dma_active == 0U) {

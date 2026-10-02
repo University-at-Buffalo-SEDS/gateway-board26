@@ -50,6 +50,7 @@ UINT tx_byte_pool_info_get(TX_BYTE_POOL*p,void*n,ULONG*a,ULONG*f,void*x,void*y,v
  if(a)*a=p->bytes-p->used;if(f)*f=1;return TX_SUCCESS;
 }
 extern volatile uint32_t g_telemetry_tlsf_active,g_telemetry_tlsf_init_failed;
+extern volatile uint32_t g_telemetry_tlsf_snapshot_count;
 extern volatile uint32_t g_telemetry_tlsf_live_bytes,g_telemetry_tlsf_peak_bytes;
 extern volatile uint32_t g_telemetry_tlsf_free_bytes,g_telemetry_tlsf_largest_free;
 static uint64_t arenas[3][4096];
@@ -76,12 +77,16 @@ int main(int argc,char**argv){
    if(items[i]){assert(((uintptr_t)items[i]&7)==0);memset(items[i],i+1,sizes[i]);}
   }
   assert(mock_irq==0);
-  if ((step & 255U) == 0U) {
+  {
+   const uint32_t walks=g_telemetry_tlsf_snapshot_count;
+   const uint32_t live=g_telemetry_tlsf_live_bytes;
    size_t request=512U+rng%8192U;
    if (telemetry_tlsf_admit(request,request)) {
     void *scratch=telemetry_tlsf_malloc(request);
     assert(scratch);telemetry_tlsf_free(scratch);
    }
+   assert(g_telemetry_tlsf_snapshot_count==walks);
+   assert(g_telemetry_tlsf_live_bytes==live);
   }
  }
  for(unsigned i=0;i<64;i++)telemetry_tlsf_free(items[i]);

@@ -22,6 +22,7 @@ volatile uint32_t g_telemetry_tlsf_failures;
 volatile uint32_t g_telemetry_tlsf_free_bytes;
 volatile uint32_t g_telemetry_tlsf_largest_free;
 volatile uint32_t g_telemetry_tlsf_free_blocks;
+volatile uint32_t g_telemetry_tlsf_snapshot_count;
 
 void telemetry_tlsf_register_pool(TX_BYTE_POOL *pool)
 {
@@ -45,6 +46,7 @@ static void snapshot_block(void *ptr, size_t size, int used, void *context)
 }
 static void snapshot(void)
 {
+    ++g_telemetry_tlsf_snapshot_count;
     g_telemetry_tlsf_free_bytes = 0;
     g_telemetry_tlsf_largest_free = 0;
     g_telemetry_tlsf_free_blocks = 0;
@@ -127,30 +129,31 @@ void telemetry_tlsf_sample(void)
     __set_PRIMASK(saved);
 }
 
-/* Reserve scratch space for dispatch/ACKs. Large work also checks the largest
- * real hole, because total free bytes alone cannot detect fragmentation.
- * Small telemetry uses a conservative O(1) occupancy estimate. */
+/* Keep admission bounded even with a fragmented heap. The accounting below
+ * conservatively includes metadata for allocated and free blocks. Checking an
+ * actual aligned scratch allocation uses TLSF's bitmap lookup and bounded
+ * split/coalesce operations; walking every heap block here delayed CAN RX.
+ * The probe is released before returning and cannot recurse into this hook. */
 bool telemetry_tlsf_admit(size_t additional, size_t largest)
 {
     const uint32_t saved = __get_PRIMASK();
     __disable_irq();
     bool allowed = initialize() != 0;
     const size_t reserve = additional <= 512U ? 512U : 4096U;
-    size_t occupied = (size_t)g_telemetry_tlsf_live_bytes +
+    const size_t occupied = (size_t)g_telemetry_tlsf_live_bytes +
         ((size_t)live_allocations + region_count) * 2U * sizeof(void *);
-    size_t available = g_telemetry_tlsf_region_bytes > occupied ?
+    const size_t available = g_telemetry_tlsf_region_bytes > occupied ?
         g_telemetry_tlsf_region_bytes - occupied : 0U;
-    if (allowed && largest >= 512U) {
-        snapshot();
-        available = g_telemetry_tlsf_free_bytes;
-        /* TLSF rounds searches to one of 32 subdivisions per power of two;
-         * memalign also needs a leading-block gap. A fixed 64-byte margin is
-         * insufficient for larger requests even when the raw hole looks big. */
-        const size_t margin = largest / 32U + 64U;
-        allowed = largest <= g_telemetry_tlsf_largest_free &&
-            g_telemetry_tlsf_largest_free - largest >= margin;
-    }
     allowed = allowed && additional <= available && reserve <= available - additional;
+    if (allowed && largest != 0U) {
+        if (largest > tlsf_block_size_max() - 64U) {
+            allowed = false;
+        } else {
+            void *scratch = tlsf_memalign(allocator, 8U, largest);
+            allowed = scratch != NULL;
+            if (scratch) tlsf_free(allocator, scratch);
+        }
+    }
     if (!allowed) ++g_gateway_memory_admission_drops;
     __set_PRIMASK(saved);
     return allowed;
