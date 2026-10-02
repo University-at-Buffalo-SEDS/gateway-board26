@@ -62,7 +62,7 @@ class QualificationContractTests(unittest.TestCase):
         self.assertIn("READ_REG(g_telemetry_uart.huart->Instance->RDR)", uart_c)
         self.assertNotIn("UART_RXDATA_FLUSH_REQUEST", uart_c)
         self.assertIn("can_bus_recover_if_bus_off", can)
-        self.assertIn("can_bus_wait_for_tx_slot", can)
+        self.assertIn("can_tx_queue_submit", can)
         self.assertIn("HAL_FDCAN_AbortTxRequest", can)
 
     def test_full_runner_profiles_memory_and_linked_network(self):
@@ -120,8 +120,8 @@ class QualificationContractTests(unittest.TestCase):
         self.assertIn("seds_router_add_side_packed_profile(", telemetry)
         self.assertIn("SEDS_SIDE_TRANSPORT_PROFILE_IPV6_LIKE", telemetry)
         can_bus = (root / "Core" / "Src" / "can_bus.c").read_text(encoding="utf-8")
-        self.assertIn("can_bus_wait_for_tx_slot", can_bus)
-        self.assertIn("CAN_BUS_TX_ENQUEUE_TIMEOUT_MS 5U", can_bus)
+        self.assertIn("can_tx_queue_submit", can_bus)
+        self.assertNotIn("can_bus_wait_for_tx_slot", can_bus)
         self.assertNotIn("< (uint32_t)frag_cnt", can_bus)
         self.assertIn("BOARD_CAN_MAX_FRAME_BYTES 128U", telemetry)
         self.assertIn('SEDSNET_MAX_QUEUE_BUDGET "16384"', cmake)

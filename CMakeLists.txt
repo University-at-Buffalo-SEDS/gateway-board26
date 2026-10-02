@@ -69,6 +69,7 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user sources here
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/can_bus.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/can_tx_queue.c
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/telemetry_thread.c
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/telemetry.c
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/flight_state_cache.c

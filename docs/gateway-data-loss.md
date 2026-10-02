@@ -35,11 +35,10 @@ UART tests, permanent-ingress fairness, full-ring behavior, and existing UART
 DMA ownership/retry tests. Build the firmware with TLSF enabled to exercise the
 allocator change; UART changes apply to both allocator choices.
 
-The synchronous CAN transmit-slot wait remains a possible source of stalls.
-Returning failure early is not a safe substitute: the current callback error
-path does not guarantee retention of all best-effort packets, and partial
-multi-frame sends can increase loss. That path needs transport-level retry
-validation before changing its behavior.
+The follow-up [asynchronous CAN transmit change](async-can.md) replaces the
+synchronous transmit-slot wait with a bounded owned queue. Full queues can still
+refuse best-effort traffic, and a single router handler can overrun a service
+slice. These are software changes pending the same hardware comparison.
 
 For the next hardware test, compare deltas of CAN received/ring-dropped/hardware
 lost counters, UART ring drops/queue refusals, allocator failures/admission

@@ -25,6 +25,7 @@
 //  ensure the consumer sees the slot contents after observing `head` (acquire).
 
 #include "can_bus.h"
+#include "can_tx_queue.h"
 #include "main.h"
 #include "can_rx_admission.h"
 #include <stdint.h>
@@ -50,9 +51,6 @@
 #endif
 #endif
 
-#ifndef CAN_BUS_TX_ENQUEUE_TIMEOUT_MS
-#define CAN_BUS_TX_ENQUEUE_TIMEOUT_MS 5U
-#endif
 
 // =========================
 // FD DLC helpers
@@ -219,23 +217,6 @@ static HAL_StatusTypeDef can_bus_recover_if_bus_off(void) {
   return HAL_OK;
 }
 
-/* A v4 topology packet needs more fragments than the three hardware slots. */
-static HAL_StatusTypeDef can_bus_wait_for_tx_slot(void) {
-  const uint32_t started_ms = HAL_GetTick();
-
-  for (;;) {
-    if (can_bus_recover_if_bus_off() != HAL_OK) {
-      return HAL_ERROR;
-    }
-    if (HAL_FDCAN_GetTxFifoFreeLevel(g_hfdcan) > 0U) {
-      return HAL_OK;
-    }
-    if ((uint32_t)(HAL_GetTick() - started_ms) >=
-        (uint32_t)CAN_BUS_TX_ENQUEUE_TIMEOUT_MS) {
-      return HAL_TIMEOUT;
-    }
-  }
-}
 static can_bus_rx_frame_t g_rx_ring[CAN_BUS_RX_RING_DEPTH];
 
 static inline uint16_t rb_next(uint16_t v) {
@@ -558,6 +539,7 @@ void can_bus_init(FDCAN_HandleTypeDef *hfdcan) {
     g_fdcan_init_error_count++;
     return;
   }
+  can_tx_queue_reset();
   // Initialize the consumer state before enabling receive interrupts.
   g_rx_head = 0;
   g_rx_tail = 0;
@@ -580,7 +562,8 @@ void can_bus_init(FDCAN_HandleTypeDef *hfdcan) {
   // Drain the three-entry hardware FIFO promptly while the worker routes data.
   if (HAL_FDCAN_ActivateNotification(hfdcan,
         FDCAN_IT_RX_FIFO0_NEW_MESSAGE | FDCAN_IT_RX_FIFO1_NEW_MESSAGE |
-        FDCAN_IT_RX_FIFO0_MESSAGE_LOST | FDCAN_IT_RX_FIFO1_MESSAGE_LOST, 0) != HAL_OK) {
+        FDCAN_IT_RX_FIFO0_MESSAGE_LOST | FDCAN_IT_RX_FIFO1_MESSAGE_LOST |
+        FDCAN_IT_TX_FIFO_EMPTY, 0) != HAL_OK) {
     g_fdcan_init_error_count++;
     return;
   }
@@ -629,11 +612,9 @@ HAL_StatusTypeDef can_bus_send_bytes(const uint8_t *bytes, size_t len,
   if (!bytes || len == 0)
     return HAL_ERROR;
 
-  const HAL_StatusTypeDef slot_status = can_bus_wait_for_tx_slot();
-  if (slot_status != HAL_OK) {
-    g_fdcan_tx_fail_count++;
-    return slot_status;
-  }
+  /* Nonblocking hardware enqueue. The owned packet queue retains the
+   * fragment if the three hardware slots are occupied. Never spin here. */
+  if (HAL_FDCAN_GetTxFifoFreeLevel(g_hfdcan) == 0U) return HAL_BUSY;
 
   if (len > 64)
     len = 64;
@@ -670,69 +651,15 @@ HAL_StatusTypeDef can_bus_send_bytes(const uint8_t *bytes, size_t len,
   return status;
 }
 
-// Send an arbitrarily large buffer by fragmenting into multiple CAN FD frames.
-// This uses fixed 64B frames (DLC=64) and a small header in each frame.
+// Copy a complete side-transport packet into the bounded foreground queue.
 HAL_StatusTypeDef can_bus_send_large(const uint8_t *bytes, size_t len,
                                      uint32_t std_id) {
-  if (!g_hfdcan)
-    return HAL_ERROR;
-  if (!bytes || len == 0)
-    return HAL_ERROR;
-  if (len > 0xFFFFu)
-    return HAL_ERROR; // header uses u16 total_len
+  if (!g_hfdcan) return HAL_ERROR;
+  return can_tx_queue_submit(bytes, len, std_id);
+}
 
-  static uint8_t g_seq = 0;
-  uint8_t seq = g_seq++;
-
-  const size_t hdr_sz = sizeof(can_bus_frag_hdr_t);
-  const size_t wire_len = CAN_BUS_FRAG_WIRE_LEN;
-  if (wire_len > 64)
-    return HAL_ERROR;
-  const size_t data_cap = wire_len - hdr_sz;
-  if (data_cap == 0)
-    return HAL_ERROR;
-
-  // frag_cnt must fit in u8 with current header design
-  size_t frag_cnt_sz = (len + data_cap - 1) / data_cap;
-  if (frag_cnt_sz == 0)
-    frag_cnt_sz = 1;
-  if (frag_cnt_sz > 255)
-    return HAL_ERROR;
-
-  uint8_t frag_cnt = (uint8_t)frag_cnt_sz;
-
-  size_t off = 0;
-  for (uint8_t idx = 0; idx < frag_cnt; idx++) {
-    uint8_t frame[64] = {0};
-
-    can_bus_frag_hdr_t hdr;
-    hdr.magic = CAN_BUS_FRAG_MAGIC;
-    hdr.source = CAN_BUS_NODE_ID;
-    hdr.seq = seq;
-    hdr.frag_idx = idx;
-    hdr.frag_cnt = frag_cnt;
-    hdr.flags = 0;
-    if (idx == 0)
-      hdr.flags |= CAN_BUS_FRAG_F_FIRST;
-    if (idx == (uint8_t)(frag_cnt - 1))
-      hdr.flags |= CAN_BUS_FRAG_F_LAST;
-    hdr.total_len = (uint16_t)len;
-
-    memcpy(frame, &hdr, hdr_sz);
-
-    size_t take = len - off;
-    if (take > data_cap)
-      take = data_cap;
-    memcpy(frame + hdr_sz, bytes + off, take);
-    off += take;
-
-    // send a fixed 64-byte payload frame (pads zeros)
-    HAL_StatusTypeDef st = can_bus_send_bytes(frame, wire_len, std_id);
-    if (st != HAL_OK)
-      return st;
-  }
-
-  return HAL_OK;
+void HAL_FDCAN_TxFifoEmptyCallback(FDCAN_HandleTypeDef *hfdcan) {
+  if (hfdcan == g_hfdcan) can_tx_queue_pump();
 }
 
 // Call this periodically from thread/main-loop context.
@@ -743,6 +670,7 @@ uint32_t can_bus_process_rx_for(uint32_t max_frames, uint32_t max_ms) {
   reasm_expire_old(now);
 
   (void)can_bus_recover_if_bus_off();
+  can_tx_queue_service();
 
 #if CAN_BUS_POLLING
   if (g_hfdcan != NULL) {

@@ -21,6 +21,7 @@ static uint16_t g_rx_head, g_rx_tail;
 static int continuous;
 static uint32_t HAL_GetTick(void) { return tick++; }
 static void reasm_expire_old(uint32_t now) { (void)now; }
+static void can_tx_queue_service(void) {}
 static int can_bus_recover_if_bus_off(void) { return 0; }
 static int rb_pop(can_bus_rx_frame_t *f) {
  if (!available && !continuous) return 0;

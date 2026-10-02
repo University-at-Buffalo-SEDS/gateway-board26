@@ -13,10 +13,11 @@ typedef void (*can_bus_rx_cb_t)(const uint8_t *data, size_t len, void *user);
 /* Init with the FDCAN handle that receives on FIFO1 (e.g. &hfdcan2). */
 void can_bus_init(FDCAN_HandleTypeDef *hfdcan);
 
-/* Send raw bytes (len clamped to 64). */
+/* Nonblocking raw hardware enqueue (len clamped to 64); HAL_BUSY if full. */
 HAL_StatusTypeDef can_bus_send_bytes(const uint8_t *bytes, size_t len, uint32_t std_id);
 
-/* Send an arbitrarily large buffer by fragmenting into multiple CAN FD frames. */
+/* Copy up to 128 bytes into the async fragmentation queue. HAL_OK means
+ * accepted, not acknowledged. HAL_BUSY refuses the whole packet unchanged. */
 HAL_StatusTypeDef can_bus_send_large(const uint8_t *bytes, size_t len, uint32_t std_id);
 
 /*
