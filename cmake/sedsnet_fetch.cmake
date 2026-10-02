@@ -12,10 +12,12 @@ set(SEDSNET_EMBEDDED_BUILD ON CACHE BOOL "Build SEDSNet for an embedded target" 
 set(SEDSNET_ENABLE_CRYPTOGRAPHY OFF CACHE BOOL
     "Keep the current unencrypted embedded transport" FORCE)
 
+include("${CMAKE_SOURCE_DIR}/cmake/sedsnet_source.cmake")
+
 FetchContent_Declare(
     sedsnet
     GIT_REPOSITORY https://github.com/Rylan-Meilutis/SEDSnet.git
-    GIT_TAG v4.0.37
+    GIT_TAG main
     GIT_SHALLOW FALSE
     PATCH_COMMAND ${CMAKE_COMMAND}
                   -DSEDSNET_SOURCE_DIR=<SOURCE_DIR>

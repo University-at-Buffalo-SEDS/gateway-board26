@@ -7,7 +7,9 @@ firmware. The gateway driver only transports complete SEDSNet packets. SEDSNet
 discovery and learned subscriptions own routing, so application data is not
 manually fanned out.
 
-CMake fetches SEDSNet `v4.0.37` and SEDS LaunchCore v1.0.0 without submodules.
+CMake tracks SEDSNet `main`, using the existing on-disk source when offline,
+and fetches SEDS LaunchCore v1.0.0 without submodules. See
+[SEDSnet source selection](docs/sedsnet-source.md).
 LaunchCore derives linker scripts and the boot/OTA layout from
 `Bootloader/board_config.h`.
 
