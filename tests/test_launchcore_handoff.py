@@ -12,7 +12,7 @@ UNSAFE_HANDOFFS = {
 
 
 class LaunchCoreHandoffContract(unittest.TestCase):
-    def test_dependencies_use_launchcore_release_and_sedsnet_main(self):
+    def test_dependencies_use_launchcore_release_and_main_sedsnet(self):
         launchcore = (ROOT / "cmake/launchcore_stm32.cmake").read_text()
         sedsnet = (ROOT / "cmake/sedsnet_fetch.cmake").read_text()
         self.assertIn(f"GIT_TAG {FIXED_LAUNCHCORE}", launchcore)

@@ -4,9 +4,16 @@
 #include <stdio.h>
 #include <string.h>
 #include "main.h"
+#ifdef TELEMETRY_USE_TLSF
+#include "telemetry_tlsf.h"
+extern volatile uint32_t g_telemetry_tlsf_free_bytes;
+extern volatile uint32_t g_telemetry_tlsf_free_blocks;
+#endif
 
+#ifndef TELEMETRY_USE_TLSF
 static TX_BYTE_POOL *rust_byte_pool_external = NULL;
 static TX_BYTE_POOL *rust_emergency_byte_pool_external = NULL;
+#endif
 static TX_MUTEX g_telemetry_mutex;
 static UINT g_telemetry_mutex_ready = 0U;
 volatile uint32_t g_telemetry_lock_get_fail = 0U;
@@ -101,6 +108,7 @@ static int str_contains_ci_n(const char *s, size_t n, const char *needle)
     return 0;
 }
 
+#ifndef TELEMETRY_USE_TLSF
 static void telemetry_memory_profile_sample(void)
 {
     ULONG available = 0U;
@@ -125,18 +133,28 @@ static void telemetry_memory_profile_sample(void)
             g_telemetry_pool_low_water = available;
         }
     }
+
 }
+#endif
 
 void telemetry_set_byte_pool(TX_BYTE_POOL *pool)
 {
+#ifdef TELEMETRY_USE_TLSF
+    telemetry_tlsf_register_pool(pool);
+#else
     rust_byte_pool_external = pool;
     telemetry_memory_profile_sample();
+#endif
 }
 
 void telemetry_set_emergency_byte_pool(TX_BYTE_POOL *pool)
 {
+#ifdef TELEMETRY_USE_TLSF
+    telemetry_tlsf_register_pool(pool);
+#else
     rust_emergency_byte_pool_external = pool;
     telemetry_memory_profile_sample();
+#endif
 }
 
 void telemetry_init_lock(void)
@@ -193,6 +211,19 @@ void telemetry_unlock(void)
 
 void *telemetryMalloc(size_t xSize)
 {
+#ifdef TELEMETRY_USE_TLSF
+    if (xSize == 0U) xSize = 1U;
+    g_telemetry_last_alloc_request = xSize;
+    if (xSize > g_telemetry_max_alloc_request) g_telemetry_max_alloc_request = xSize;
+    void *ptr = telemetry_tlsf_malloc(xSize);
+    if (!ptr) {
+        ++g_telemetry_alloc_fail;
+        g_telemetry_alloc_failure_request = xSize;
+        g_telemetry_alloc_failure_available = g_telemetry_tlsf_free_bytes;
+        g_telemetry_alloc_failure_fragments = g_telemetry_tlsf_free_blocks;
+    } else ++g_telemetry_alloc_count;
+    return ptr;
+#else
     void *ptr = NULL;
     UINT allocation_status = TX_NO_MEMORY;
 
@@ -213,15 +244,17 @@ void *telemetryMalloc(size_t xSize)
         g_telemetry_max_alloc_request = (uint32_t)xSize;
     }
 
-    /* Keep topology/schema serialization blocks away from the heavily churned
-     * small-object pool. On the Gateway a live capture observed a 6152-byte
-     * request fail with 6776 bytes free across 303 fragments. Reserving a
-     * second pool is deterministic; trying to defragment a live ThreadX pool
-     * is neither safe nor supported. */
-    if (xSize >= 4096U && rust_emergency_byte_pool_external != NULL)
+    /* Reserve the contiguous pool for schema-sized allocations. A hardware
+     * restart capture found it occupied by eight retained 1.0--2.4 KiB blocks,
+     * leaving only 1264 bytes when a 3652-byte schema Arc was needed. The
+     * ordinary pool still had 7308 bytes, fragmented across 332 blocks.
+     * Put medium-lived queues/catalogs in the ordinary pool first; keep the
+     * large pool for >=3 KiB serialization scratch. Both directions retain
+     * nonblocking fallback; never wait while holding the router lock. */
+    if (xSize >= 3072U && rust_emergency_byte_pool_external != NULL)
     {
         allocation_status = tx_byte_allocate(
-            rust_emergency_byte_pool_external, &ptr, xSize, 5);
+            rust_emergency_byte_pool_external, &ptr, xSize, TX_NO_WAIT);
         if (allocation_status == TX_SUCCESS)
         {
             g_telemetry_alloc_emergency_recoveries++;
@@ -229,13 +262,13 @@ void *telemetryMalloc(size_t xSize)
     }
     if (allocation_status != TX_SUCCESS)
     {
-        allocation_status = tx_byte_allocate(rust_byte_pool_external, &ptr, xSize, 5);
+        allocation_status = tx_byte_allocate(rust_byte_pool_external, &ptr, xSize, TX_NO_WAIT);
     }
-    if (allocation_status != TX_SUCCESS && xSize < 4096U &&
+    if (allocation_status != TX_SUCCESS && xSize < 3072U &&
         rust_emergency_byte_pool_external != NULL)
     {
         allocation_status = tx_byte_allocate(
-            rust_emergency_byte_pool_external, &ptr, xSize, 5);
+            rust_emergency_byte_pool_external, &ptr, xSize, TX_NO_WAIT);
         if (allocation_status == TX_SUCCESS)
         {
             g_telemetry_alloc_emergency_recoveries++;
@@ -257,16 +290,45 @@ void *telemetryMalloc(size_t xSize)
     g_telemetry_alloc_count++;
     telemetry_memory_profile_sample();
     return ptr;
+#endif
+}
+
+/* CAN's async queue uses fallible foreground allocations, never ISR heap
+ * work. Leave at least 4 KiB available for router dispatch/control traffic. */
+void *telemetry_can_tx_allocate(size_t bytes)
+{
+#ifdef TELEMETRY_USE_TLSF
+    if (!telemetry_tlsf_admit(bytes + 512U, bytes)) return NULL;
+#else
+    ULONG available = 0U, emergency = 0U;
+    if (!rust_byte_pool_external ||
+        tx_byte_pool_info_get(rust_byte_pool_external, TX_NULL, &available,
+                             TX_NULL, TX_NULL, TX_NULL, TX_NULL) != TX_SUCCESS)
+        return NULL;
+    if (rust_emergency_byte_pool_external)
+        (void)tx_byte_pool_info_get(rust_emergency_byte_pool_external, TX_NULL,
+                                   &emergency, TX_NULL, TX_NULL, TX_NULL, TX_NULL);
+    if (bytes > (size_t)available + emergency ||
+        (size_t)available + emergency - bytes < 4096U) return NULL;
+#endif
+    return telemetryMalloc(bytes);
 }
 
 void telemetryFree(void *pv)
 {
+#ifdef TELEMETRY_USE_TLSF
+    if (pv) {
+        telemetry_tlsf_free(pv);
+        ++g_telemetry_free_count;
+    }
+#else
     if (pv != NULL)
     {
         (void)tx_byte_release(pv);
         g_telemetry_free_count++;
         telemetry_memory_profile_sample();
     }
+#endif
 }
 
 void seds_error_msg(const char *str, size_t len)

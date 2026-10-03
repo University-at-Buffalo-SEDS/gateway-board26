@@ -12,7 +12,7 @@
 //  - Uses CAN FD frames for fragmentation (default payload 64 bytes).
 //  - Fragment frames are distinguished by a small "magic" header in the
 //  payload.
-//  - Reassembly is bounded (no malloc). Oldest RX frames are dropped on ring
+//  - Reassembly is bounded (no malloc). Incoming RX frames are dropped on ring
 //  overflow.
 //  - One producer (ISR) and one consumer (thread calling can_bus_process_rx()).
 //  - You can call can_bus_process_rx() from a ThreadX thread, or main
@@ -25,7 +25,9 @@
 //  ensure the consumer sees the slot contents after observing `head` (acquire).
 
 #include "can_bus.h"
+#include "can_tx_queue.h"
 #include "main.h"
+#include "can_rx_admission.h"
 #include <stdint.h>
 #include <string.h>
 
@@ -42,12 +44,13 @@
 #endif
 
 #ifndef CAN_BUS_POLLING
+#ifdef SEDS_FIRMWARE_SIM_TEST
 #define CAN_BUS_POLLING 1
+#else
+#define CAN_BUS_POLLING 0
+#endif
 #endif
 
-#ifndef CAN_BUS_TX_ENQUEUE_TIMEOUT_MS
-#define CAN_BUS_TX_ENQUEUE_TIMEOUT_MS 5U
-#endif
 
 // =========================
 // FD DLC helpers
@@ -184,6 +187,9 @@ static volatile uint16_t g_rx_head = 0;
 static volatile uint16_t g_rx_tail = 0;
 static volatile uint32_t g_rx_dropped_frames = 0;
 volatile uint32_t g_fdcan_rx_count = 0;
+volatile uint32_t g_can_rx_bulk_dropped = 0;
+volatile uint32_t g_fdcan_rx_hw_overflow_count = 0;
+volatile uint32_t g_fdcan_init_error_count = 0;
 volatile uint32_t g_fdcan_tx_ok_count = 0;
 volatile uint32_t g_fdcan_tx_fail_count = 0;
 volatile uint32_t g_fdcan_bus_off_count = 0;
@@ -211,23 +217,6 @@ static HAL_StatusTypeDef can_bus_recover_if_bus_off(void) {
   return HAL_OK;
 }
 
-/* A v4 topology packet needs more fragments than the three hardware slots. */
-static HAL_StatusTypeDef can_bus_wait_for_tx_slot(void) {
-  const uint32_t started_ms = HAL_GetTick();
-
-  for (;;) {
-    if (can_bus_recover_if_bus_off() != HAL_OK) {
-      return HAL_ERROR;
-    }
-    if (HAL_FDCAN_GetTxFifoFreeLevel(g_hfdcan) > 0U) {
-      return HAL_OK;
-    }
-    if ((uint32_t)(HAL_GetTick() - started_ms) >=
-        (uint32_t)CAN_BUS_TX_ENQUEUE_TIMEOUT_MS) {
-      return HAL_TIMEOUT;
-    }
-  }
-}
 static can_bus_rx_frame_t g_rx_ring[CAN_BUS_RX_RING_DEPTH];
 
 static inline uint16_t rb_next(uint16_t v) {
@@ -243,8 +232,7 @@ static inline int __attribute__((unused)) rb_is_empty(void) {
 
 static inline int rb_is_full(void) { return rb_next(g_rx_head) == g_rx_tail; }
 
-// Push frame from ISR. Drop-oldest on overflow (hybrid “stay current”
-// behavior).
+// Push frame from ISR. Drop incoming frames on overflow.
 //
 // Memory ordering:
 //  - We must ensure slot writes are visible before publishing head.
@@ -252,6 +240,16 @@ static inline int rb_is_full(void) { return rb_next(g_rx_head) == g_rx_tail; }
 static inline void rb_push(uint32_t std_id, const uint8_t *data, uint8_t len) {
   if (len > 64)
     len = 64;
+
+  const uint16_t head = g_rx_head, tail = g_rx_tail;
+  const unsigned occupied = head >= tail ? head - tail :
+      CAN_BUS_RX_RING_DEPTH - tail + head;
+  if (occupied >= CAN_BUS_RX_RING_DEPTH - 1U - 8U &&
+      can_rx_is_bulk_loadcell(data, len)) {
+    g_can_rx_bulk_dropped++;
+    g_rx_dropped_frames++;
+    return;
+  }
 
   if (rb_is_full()) {
     g_rx_dropped_frames++;
@@ -536,21 +534,17 @@ static void handle_rx_frame(const can_bus_rx_frame_t *f, uint32_t now_ms) {
 
 void can_bus_init(FDCAN_HandleTypeDef *hfdcan) {
   g_hfdcan = hfdcan;
-  // subscribers static-zeroed
-  if (hfdcan != NULL) {
-    (void)HAL_FDCAN_Stop(hfdcan);
-    (void)can_bus_configure_filters(hfdcan);
-#if !CAN_BUS_POLLING
-    (void)HAL_FDCAN_ActivateNotification(
-        hfdcan, FDCAN_IT_RX_FIFO0_NEW_MESSAGE | FDCAN_IT_RX_FIFO1_NEW_MESSAGE, 0);
-#endif
-    (void)HAL_FDCAN_Start(hfdcan);
+  if (hfdcan != NULL && hfdcan->State == HAL_FDCAN_STATE_BUSY &&
+      HAL_FDCAN_Stop(hfdcan) != HAL_OK) {
+    g_fdcan_init_error_count++;
+    return;
   }
-
-  // reset rings + reasm
+  can_tx_queue_reset();
+  // Initialize the consumer state before enabling receive interrupts.
   g_rx_head = 0;
   g_rx_tail = 0;
   g_rx_dropped_frames = 0;
+  g_fdcan_rx_hw_overflow_count = 0;
   g_can_reasm_completed = 0;
   g_can_reasm_seq_resets = 0;
   g_can_reasm_slot_evictions = 0;
@@ -559,6 +553,22 @@ void can_bus_init(FDCAN_HandleTypeDef *hfdcan) {
   for (unsigned i = 0; i < CAN_BUS_REASM_SLOTS; i++) {
     reasm_reset(&g_reasm[i]);
   }
+  if (hfdcan == NULL) return;
+  if (can_bus_configure_filters(hfdcan) != HAL_OK) {
+    g_fdcan_init_error_count++;
+    return;
+  }
+#if !CAN_BUS_POLLING
+  // Drain the three-entry hardware FIFO promptly while the worker routes data.
+  if (HAL_FDCAN_ActivateNotification(hfdcan,
+        FDCAN_IT_RX_FIFO0_NEW_MESSAGE | FDCAN_IT_RX_FIFO1_NEW_MESSAGE |
+        FDCAN_IT_RX_FIFO0_MESSAGE_LOST | FDCAN_IT_RX_FIFO1_MESSAGE_LOST |
+        FDCAN_IT_TX_FIFO_EMPTY, 0) != HAL_OK) {
+    g_fdcan_init_error_count++;
+    return;
+  }
+#endif
+  if (HAL_FDCAN_Start(hfdcan) != HAL_OK) g_fdcan_init_error_count++;
 }
 
 HAL_StatusTypeDef can_bus_subscribe_rx(can_bus_rx_cb_t cb, void *user) {
@@ -602,11 +612,9 @@ HAL_StatusTypeDef can_bus_send_bytes(const uint8_t *bytes, size_t len,
   if (!bytes || len == 0)
     return HAL_ERROR;
 
-  const HAL_StatusTypeDef slot_status = can_bus_wait_for_tx_slot();
-  if (slot_status != HAL_OK) {
-    g_fdcan_tx_fail_count++;
-    return slot_status;
-  }
+  /* Nonblocking hardware enqueue. The owned packet queue retains the
+   * fragment if the three hardware slots are occupied. Never spin here. */
+  if (HAL_FDCAN_GetTxFifoFreeLevel(g_hfdcan) == 0U) return HAL_BUSY;
 
   if (len > 64)
     len = 64;
@@ -643,79 +651,26 @@ HAL_StatusTypeDef can_bus_send_bytes(const uint8_t *bytes, size_t len,
   return status;
 }
 
-// Send an arbitrarily large buffer by fragmenting into multiple CAN FD frames.
-// This uses fixed 64B frames (DLC=64) and a small header in each frame.
+// Copy a complete side-transport packet into the bounded foreground queue.
 HAL_StatusTypeDef can_bus_send_large(const uint8_t *bytes, size_t len,
                                      uint32_t std_id) {
-  if (!g_hfdcan)
-    return HAL_ERROR;
-  if (!bytes || len == 0)
-    return HAL_ERROR;
-  if (len > 0xFFFFu)
-    return HAL_ERROR; // header uses u16 total_len
+  if (!g_hfdcan) return HAL_ERROR;
+  return can_tx_queue_submit(bytes, len, std_id);
+}
 
-  static uint8_t g_seq = 0;
-  uint8_t seq = g_seq++;
-
-  const size_t hdr_sz = sizeof(can_bus_frag_hdr_t);
-  const size_t wire_len = CAN_BUS_FRAG_WIRE_LEN;
-  if (wire_len > 64)
-    return HAL_ERROR;
-  const size_t data_cap = wire_len - hdr_sz;
-  if (data_cap == 0)
-    return HAL_ERROR;
-
-  // frag_cnt must fit in u8 with current header design
-  size_t frag_cnt_sz = (len + data_cap - 1) / data_cap;
-  if (frag_cnt_sz == 0)
-    frag_cnt_sz = 1;
-  if (frag_cnt_sz > 255)
-    return HAL_ERROR;
-
-  uint8_t frag_cnt = (uint8_t)frag_cnt_sz;
-
-  size_t off = 0;
-  for (uint8_t idx = 0; idx < frag_cnt; idx++) {
-    uint8_t frame[64] = {0};
-
-    can_bus_frag_hdr_t hdr;
-    hdr.magic = CAN_BUS_FRAG_MAGIC;
-    hdr.source = CAN_BUS_NODE_ID;
-    hdr.seq = seq;
-    hdr.frag_idx = idx;
-    hdr.frag_cnt = frag_cnt;
-    hdr.flags = 0;
-    if (idx == 0)
-      hdr.flags |= CAN_BUS_FRAG_F_FIRST;
-    if (idx == (uint8_t)(frag_cnt - 1))
-      hdr.flags |= CAN_BUS_FRAG_F_LAST;
-    hdr.total_len = (uint16_t)len;
-
-    memcpy(frame, &hdr, hdr_sz);
-
-    size_t take = len - off;
-    if (take > data_cap)
-      take = data_cap;
-    memcpy(frame + hdr_sz, bytes + off, take);
-    off += take;
-
-    // send a fixed 64-byte payload frame (pads zeros)
-    HAL_StatusTypeDef st = can_bus_send_bytes(frame, wire_len, std_id);
-    if (st != HAL_OK)
-      return st;
-  }
-
-  return HAL_OK;
+void HAL_FDCAN_TxFifoEmptyCallback(FDCAN_HandleTypeDef *hfdcan) {
+  if (hfdcan == g_hfdcan) can_tx_queue_pump();
 }
 
 // Call this periodically from thread/main-loop context.
 // It drains the ISR ring buffer, expires old partial reassembly slots,
 // reassembles fragmented messages, and notifies subscribers.
-void can_bus_process_rx(void) {
+uint32_t can_bus_process_rx_for(uint32_t max_frames, uint32_t max_ms) {
   uint32_t now = HAL_GetTick();
   reasm_expire_old(now);
 
   (void)can_bus_recover_if_bus_off();
+  can_tx_queue_service();
 
 #if CAN_BUS_POLLING
   if (g_hfdcan != NULL) {
@@ -727,11 +682,30 @@ void can_bus_process_rx(void) {
   can_bus_rx_frame_t f;
   /* Bound each pass so sustained traffic cannot starve discovery, time sync,
    * OTA handling, or the scheduler yield in the telemetry thread. */
-  for (uint32_t processed = 0; processed < CAN_BUS_RX_RING_DEPTH; ++processed) {
+  uint32_t processed = 0U;
+  for (; processed < max_frames && processed < CAN_BUS_RX_RING_DEPTH; ++processed) {
     if (!rb_pop(&f))
       break;
-    handle_rx_frame(&f, now);
+    handle_rx_frame(&f, HAL_GetTick());
+    if (max_ms != 0U && (uint32_t)(HAL_GetTick() - now) >= max_ms) {
+      ++processed;
+      break;
+    }
   }
+  return processed;
+}
+
+uint32_t can_bus_process_rx_budget(uint32_t max_frames) {
+  return can_bus_process_rx_for(max_frames, 0U);
+}
+
+uint32_t can_bus_rx_pending(void) {
+  const uint16_t head = g_rx_head, tail = g_rx_tail;
+  return head >= tail ? head - tail : CAN_BUS_RX_RING_DEPTH - tail + head;
+}
+
+void can_bus_process_rx(void) {
+  (void)can_bus_process_rx_budget(CAN_BUS_RX_RING_DEPTH);
 }
 
 uint32_t can_bus_rx_dropped_frames(void) { return g_rx_dropped_frames; }
@@ -758,7 +732,11 @@ void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan,
     return;
   }
 
-  if ((RxFifo0ITs & FDCAN_IT_RX_FIFO0_NEW_MESSAGE) == 0U) {
+  if ((RxFifo0ITs & FDCAN_IT_RX_FIFO0_MESSAGE_LOST) != 0U) {
+    g_fdcan_rx_hw_overflow_count++;
+  }
+  if ((RxFifo0ITs & (FDCAN_IT_RX_FIFO0_NEW_MESSAGE |
+                      FDCAN_IT_RX_FIFO0_MESSAGE_LOST)) == 0U) {
     return;
   }
 
@@ -771,7 +749,11 @@ void HAL_FDCAN_RxFifo1Callback(FDCAN_HandleTypeDef *hfdcan,
     return;
   }
 
-  if ((RxFifo1ITs & FDCAN_IT_RX_FIFO1_NEW_MESSAGE) == 0U) {
+  if ((RxFifo1ITs & FDCAN_IT_RX_FIFO1_MESSAGE_LOST) != 0U) {
+    g_fdcan_rx_hw_overflow_count++;
+  }
+  if ((RxFifo1ITs & (FDCAN_IT_RX_FIFO1_NEW_MESSAGE |
+                      FDCAN_IT_RX_FIFO1_MESSAGE_LOST)) == 0U) {
     return;
   }
 

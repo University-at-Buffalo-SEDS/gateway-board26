@@ -2,7 +2,9 @@ include(FetchContent)
 
 set(SEDSNET_SCHEMA_FILE "${CMAKE_SOURCE_DIR}/config/sedsnet.json")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-             "${SEDSNET_SCHEMA_FILE}")
+             "${SEDSNET_SCHEMA_FILE}"
+             "${CMAKE_SOURCE_DIR}/third_party/embedded-crc32fast/Cargo.toml"
+             "${CMAKE_SOURCE_DIR}/third_party/embedded-crc32fast/src/lib.rs")
 
 set(SEDSNET_FORCE_RELEASE ON CACHE BOOL
     "Build SEDSNet in release mode for embedded firmware" FORCE)

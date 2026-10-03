@@ -7,7 +7,9 @@ firmware. The gateway driver only transports complete SEDSNet packets. SEDSNet
 discovery and learned subscriptions own routing, so application data is not
 manually fanned out.
 
-CMake fetches rolling SEDSNet `main` and SEDS LaunchCore v1.0.0 without submodules.
+CMake tracks SEDSNet `main`, using the existing on-disk source when offline,
+and fetches SEDS LaunchCore v1.0.0 without submodules. See
+[SEDSnet source selection](docs/sedsnet-source.md).
 LaunchCore derives linker scripts and the boot/OTA layout from
 `Bootloader/board_config.h`.
 
@@ -65,3 +67,28 @@ the simulator probes. After generation, run
 [Board watchdog configuration and validation](docs/watchdog.md). Build with
 `./build.py build --release --watchdog`.
 Watchdogs are opt-in and require the matching bootloader.
+## Memory pressure and forwarding
+
+The telemetry loop drains TX before and between short CAN receive slices. Discovery
+and time-sync maintenance continue regularly. SEDSNet 4.0.35 avoids duplicate route
+and schema buffers and can reject new work before transient allocations consume
+space needed for dispatch.
+
+Build the allocator experiment with `./build.py build --release --allocator tlsf`.
+ThreadX still schedules the threads. In TLSF builds, the registered admission probe
+checks free bytes and, for larger requests, the largest contiguous free block. It
+reserves 4 KiB for normal work and a smaller 512-byte reserve for ACK processing.
+`g_gateway_memory_admission_drops` counts refused operations; it is distinct from
+`g_rx_dropped_frames` (CAN ring overruns) and the allocator failure/panic counters.
+Refusals do not create allocated error-log packets. Default ThreadX allocator
+builds do not register this TLSF-specific probe.
+
+The allocator pool sizes are unchanged. Fixed queue preallocation is 1 KiB per
+queue, while the shared retained-memory ceiling remains 16 KiB. The reduced
+preallocation releases scratch headroom; overflow remains bounded.
+
+The tested gateway/Pico UART pair runs at 1,000,000 baud (`Pico1M` preset); both
+ends must match. This is separate from the 115200-baud radio link. Hardware tests
+show reduced CAN loss, not lossless service or indefinite OOM immunity. Soak tests
+must monitor forwarding, all board liveness, pressure refusals, allocator failures,
+and ring overruns together.

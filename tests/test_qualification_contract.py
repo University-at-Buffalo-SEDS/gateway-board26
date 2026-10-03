@@ -18,8 +18,7 @@ class QualificationContractTests(unittest.TestCase):
         self.assertIn("sedsnet_emergency_pool_memory", app)
         self.assertIn("telemetry_set_emergency_byte_pool", app)
         self.assertIn("g_telemetry_alloc_emergency_recoveries++", hooks)
-        self.assertIn("xSize >= 4096U", hooks)
-        self.assertIn("303 fragments", hooks)
+        self.assertIn("xSize >= 3072U", hooks)
 
     def test_gateway_telemetry_stack_has_profiled_headroom(self):
         root = Path(build.__file__).resolve().parent
@@ -63,7 +62,7 @@ class QualificationContractTests(unittest.TestCase):
         self.assertIn("READ_REG(g_telemetry_uart.huart->Instance->RDR)", uart_c)
         self.assertNotIn("UART_RXDATA_FLUSH_REQUEST", uart_c)
         self.assertIn("can_bus_recover_if_bus_off", can)
-        self.assertIn("can_bus_wait_for_tx_slot", can)
+        self.assertIn("can_tx_queue_submit", can)
         self.assertIn("HAL_FDCAN_AbortTxRequest", can)
 
     def test_full_runner_profiles_memory_and_linked_network(self):
@@ -121,12 +120,12 @@ class QualificationContractTests(unittest.TestCase):
         self.assertIn("seds_router_add_side_packed_profile(", telemetry)
         self.assertIn("SEDS_SIDE_TRANSPORT_PROFILE_IPV6_LIKE", telemetry)
         can_bus = (root / "Core" / "Src" / "can_bus.c").read_text(encoding="utf-8")
-        self.assertIn("can_bus_wait_for_tx_slot", can_bus)
-        self.assertIn("CAN_BUS_TX_ENQUEUE_TIMEOUT_MS 5U", can_bus)
+        self.assertIn("can_tx_queue_submit", can_bus)
+        self.assertNotIn("can_bus_wait_for_tx_slot", can_bus)
         self.assertNotIn("< (uint32_t)frag_cnt", can_bus)
         self.assertIn("BOARD_CAN_MAX_FRAME_BYTES 128U", telemetry)
-        self.assertIn('SEDSNET_MAX_QUEUE_BUDGET "8192"', cmake)
-        self.assertIn('SEDSNET_ENV_STARTING_QUEUE_SIZE "2048"', cmake)
+        self.assertIn('SEDSNET_MAX_QUEUE_BUDGET "16384"', cmake)
+        self.assertIn('SEDSNET_ENV_STARTING_QUEUE_SIZE "1024"', cmake)
         self.assertIn('SEDSNET_ENV_QUEUE_GROW_STEP "1.0"', cmake)
 
     def test_physical_bridge_preserves_the_packed_wire_image(self):
@@ -237,8 +236,8 @@ class QualificationContractTests(unittest.TestCase):
         thread = (root / "Core" / "Src" / "telemetry_thread.c").read_text(
             encoding="utf-8"
         )
-        self.assertIn("wire_time_ms + 50U", uart)
-        self.assertIn("telemetry_uart_reply_next_data_frame();", uart)
+        self.assertIn("wire_ms + 50U", uart)
+        self.assertIn("HAL_UART_Transmit_DMA", uart)
         flush = uart.split("static void telemetry_uart_flush_tx_queue", 1)[1]
         flush = flush.split("SedsResult telemetry_uart_init", 1)[0]
         self.assertNotIn("while (g_telemetry_uart.tx_count", flush)
