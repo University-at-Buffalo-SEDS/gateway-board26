@@ -7,13 +7,14 @@ extern const launchcore_storage_driver_t launchcore_board_storage_driver;
 
 void platform_early_init(void)
 {
+    platform_feed_watchdog();
     launchcore_storage_set_driver(&launchcore_board_storage_driver);
 }
 
 void platform_clock_init(void) {}
 void platform_external_ram_init(void) {}
 void platform_external_flash_init(void) {}
-void platform_deinit_before_jump(void) {}
+void platform_deinit_before_jump(void) { platform_feed_watchdog(); }
 bool platform_recovery_requested(void) { return false; }
 
 void platform_system_reset(void)
@@ -23,7 +24,7 @@ void platform_system_reset(void)
 }
 
 uint32_t platform_get_reset_reason(void) { return RCC->CSR; }
-void platform_feed_watchdog(void) {}
+void platform_feed_watchdog(void) { IWDG->KR = 0xAAAAU; }
 
 bool platform_validate_app_vector(uint32_t vector_table_addr, uint32_t stack_pointer,
                                   uint32_t reset_handler)
@@ -41,6 +42,7 @@ bool platform_validate_app_vector(uint32_t vector_table_addr, uint32_t stack_poi
 /* The flash HAL only needs a monotonic timeout source in the bootloader. */
 uint32_t HAL_GetTick(void)
 {
+    platform_feed_watchdog();
     static uint32_t tick;
     return tick++;
 }

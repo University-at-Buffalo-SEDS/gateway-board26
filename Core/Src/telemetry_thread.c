@@ -1,3 +1,4 @@
+#include "board_watchdog.h"
 // telemetry_thread.c
 #include "GB-Threads.h"
 #ifdef TELEMETRY_BOARD_LINK_UART
@@ -63,6 +64,7 @@ void telemetry_thread_entry(ULONG initial_input)
 
     for (;;)
     {
+        board_watchdog_progress(BOARD_WATCHDOG_NETWORK);
         g_gateway_telemetry_loop_count++;
         michaeal_please_read_my_uart_data_and_decode_it_correctly_and_pass_it_to_the_telemetry_library_thanks_a_bunch_we_love_you_michael;
 #ifdef TELEMETRY_BOARD_LINK_UART
