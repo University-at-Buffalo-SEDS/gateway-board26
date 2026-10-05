@@ -80,7 +80,8 @@ void telemetry_thread_entry(ULONG initial_input)
     uint32_t maintenance_due = HAL_GetTick();
     for (;;)
     {
-        board_watchdog_progress(BOARD_WATCHDOG_NETWORK);
+        if (can_bus_health_ok())
+            board_watchdog_progress(BOARD_WATCHDOG_NETWORK);
         g_gateway_telemetry_loop_count++;
         SERVICE(0, telemetry_uart_process());
         /* Free retained TX payloads before admitting another CAN burst. */

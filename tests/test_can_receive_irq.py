@@ -37,6 +37,12 @@ typedef struct { int State; } FDCAN_HandleTypeDef;
 #define FDCAN_IT_RX_FIFO0_MESSAGE_LOST 4U
 #define FDCAN_IT_RX_FIFO1_MESSAGE_LOST 8U
 #define FDCAN_IT_TX_FIFO_EMPTY 16U
+#define FDCAN_IT_TX_COMPLETE 32U
+#define FDCAN_TX_BUFFER0 1U
+#define FDCAN_TX_BUFFER1 2U
+#define FDCAN_TX_BUFFER2 4U
+static struct { int waiting; } g_can_health;
+static unsigned g_can_healthy, g_can_recovering;
 #define FDCAN_RX_FIFO0 0U
 #define FDCAN_RX_FIFO1 1U
 static FDCAN_HandleTypeDef *g_hfdcan;
@@ -65,7 +71,7 @@ static void can_bus_drain_rx_fifo(FDCAN_HandleTypeDef *h, unsigned fifo) { asser
 int main(void) {
  FDCAN_HandleTypeDef h={0}, other={0};
  g_rx_head=99; g_rx_tail=88; can_bus_init(&h);
- assert(starts==1 && g_rx_head==1 && notifications==31 && stops==0);
+ assert(starts==1 && g_rx_head==1 && notifications==63 && stops==0);
  HAL_FDCAN_RxFifo0Callback(&h,1); assert(drains[0]==1 && !g_fdcan_rx_hw_overflow_count);
  HAL_FDCAN_RxFifo0Callback(&h,4); assert(drains[0]==2 && g_fdcan_rx_hw_overflow_count==1);
  HAL_FDCAN_RxFifo1Callback(&h,2|8); assert(drains[1]==1 && g_fdcan_rx_hw_overflow_count==2);

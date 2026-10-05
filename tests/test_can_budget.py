@@ -14,6 +14,8 @@ class CanBudgetTests(unittest.TestCase):
 #include <assert.h>
 #include <stdint.h>
 #define CAN_BUS_POLLING 0
+#define HAL_OK 0
+static int g_can_recovering;
 #define CAN_BUS_RX_RING_DEPTH 48U
 typedef struct { unsigned id; } can_bus_rx_frame_t;
 static unsigned available, handled, tick, next_id;

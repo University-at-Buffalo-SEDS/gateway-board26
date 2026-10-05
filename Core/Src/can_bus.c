@@ -26,6 +26,7 @@
 
 #include "can_bus.h"
 #include "can_tx_queue.h"
+#include "can_transport_health.h"
 #include "main.h"
 #include "can_rx_admission.h"
 #include <stdint.h>
@@ -195,26 +196,48 @@ volatile uint32_t g_fdcan_tx_fail_count = 0;
 volatile uint32_t g_fdcan_bus_off_count = 0;
 volatile uint32_t g_fdcan_recovery_count = 0;
 
+volatile uint32_t g_fdcan_tx_complete_events;
+volatile uint32_t g_fdcan_stall_recovery_count;
+volatile uint32_t g_fdcan_recovery_fail_count;
+volatile uint32_t g_fdcan_last_stall_psr, g_fdcan_last_stall_ecr;
+static can_transport_health g_can_health;
+static volatile uint8_t g_can_recovering;
+static uint8_t g_can_healthy;
+
+int can_bus_health_ok(void) { return g_can_healthy != 0U; }
+
 static HAL_StatusTypeDef can_bus_recover_if_bus_off(void) {
   FDCAN_ProtocolStatusTypeDef protocol_status;
-
   if (g_hfdcan == NULL ||
       HAL_FDCAN_GetProtocolStatus(g_hfdcan, &protocol_status) != HAL_OK) {
+    g_can_healthy = 0U;
     return HAL_ERROR;
   }
-  if (protocol_status.BusOff == 0U) {
-    return HAL_OK;
-  }
+  int stalled = can_transport_stalled(&g_can_health, HAL_GetTick(),
+      g_hfdcan->Instance->TXBRP, g_fdcan_tx_complete_events);
+  if (protocol_status.BusOff == 0U && !stalled) return HAL_OK;
 
-  g_fdcan_bus_off_count++;
+  if (protocol_status.BusOff != 0U) g_fdcan_bus_off_count++;
+  else g_fdcan_stall_recovery_count++;
+  g_fdcan_last_stall_psr = g_hfdcan->Instance->PSR;
+  g_fdcan_last_stall_ecr = g_hfdcan->Instance->ECR;
+  /* Prevent the TX-empty ISR from refilling buffers being cancelled. */
+  g_can_recovering = 1U;
   (void)HAL_FDCAN_AbortTxRequest(
       g_hfdcan, FDCAN_TX_BUFFER0 | FDCAN_TX_BUFFER1 | FDCAN_TX_BUFFER2);
-  if (HAL_FDCAN_Stop(g_hfdcan) != HAL_OK ||
-      HAL_FDCAN_Start(g_hfdcan) != HAL_OK) {
-    return HAL_ERROR;
-  }
+  if (HAL_FDCAN_Stop(g_hfdcan) != HAL_OK) goto failed;
+  /* A partly transmitted packet cannot survive cancellation of its fragments.
+   * Release its owned storage in foreground; reliable commands retry upstream. */
+  can_tx_queue_reset();
+  if (HAL_FDCAN_Start(g_hfdcan) != HAL_OK) goto failed;
+  g_can_health.waiting = 0U;
+  g_can_recovering = 0U;
   g_fdcan_recovery_count++;
   return HAL_OK;
+failed:
+  g_fdcan_recovery_fail_count++;
+  g_can_healthy = 0U; /* Latched: withhold watchdog progress until reset. */
+  return HAL_ERROR;
 }
 
 static can_bus_rx_frame_t g_rx_ring[CAN_BUS_RX_RING_DEPTH];
@@ -534,6 +557,9 @@ static void handle_rx_frame(const can_bus_rx_frame_t *f, uint32_t now_ms) {
 
 void can_bus_init(FDCAN_HandleTypeDef *hfdcan) {
   g_hfdcan = hfdcan;
+  g_can_healthy = 0U;
+  g_can_recovering = 0U;
+  g_can_health.waiting = 0U;
   if (hfdcan != NULL && hfdcan->State == HAL_FDCAN_STATE_BUSY &&
       HAL_FDCAN_Stop(hfdcan) != HAL_OK) {
     g_fdcan_init_error_count++;
@@ -563,12 +589,14 @@ void can_bus_init(FDCAN_HandleTypeDef *hfdcan) {
   if (HAL_FDCAN_ActivateNotification(hfdcan,
         FDCAN_IT_RX_FIFO0_NEW_MESSAGE | FDCAN_IT_RX_FIFO1_NEW_MESSAGE |
         FDCAN_IT_RX_FIFO0_MESSAGE_LOST | FDCAN_IT_RX_FIFO1_MESSAGE_LOST |
-        FDCAN_IT_TX_FIFO_EMPTY, 0) != HAL_OK) {
+        FDCAN_IT_TX_FIFO_EMPTY | FDCAN_IT_TX_COMPLETE,
+        FDCAN_TX_BUFFER0 | FDCAN_TX_BUFFER1 | FDCAN_TX_BUFFER2) != HAL_OK) {
     g_fdcan_init_error_count++;
     return;
   }
 #endif
   if (HAL_FDCAN_Start(hfdcan) != HAL_OK) g_fdcan_init_error_count++;
+  else g_can_healthy = 1U;
 }
 
 HAL_StatusTypeDef can_bus_subscribe_rx(can_bus_rx_cb_t cb, void *user) {
@@ -654,12 +682,18 @@ HAL_StatusTypeDef can_bus_send_bytes(const uint8_t *bytes, size_t len,
 // Copy a complete side-transport packet into the bounded foreground queue.
 HAL_StatusTypeDef can_bus_send_large(const uint8_t *bytes, size_t len,
                                      uint32_t std_id) {
-  if (!g_hfdcan) return HAL_ERROR;
+  if (!g_hfdcan || g_can_recovering) return HAL_ERROR;
   return can_tx_queue_submit(bytes, len, std_id);
 }
 
 void HAL_FDCAN_TxFifoEmptyCallback(FDCAN_HandleTypeDef *hfdcan) {
-  if (hfdcan == g_hfdcan) can_tx_queue_pump();
+  if (hfdcan == g_hfdcan && !g_can_recovering) can_tx_queue_pump();
+}
+
+void HAL_FDCAN_TxBufferCompleteCallback(FDCAN_HandleTypeDef *hfdcan,
+                                        uint32_t buffer_indexes) {
+  if (hfdcan == g_hfdcan && buffer_indexes != 0U)
+    g_fdcan_tx_complete_events++;
 }
 
 // Call this periodically from thread/main-loop context.
@@ -669,8 +703,8 @@ uint32_t can_bus_process_rx_for(uint32_t max_frames, uint32_t max_ms) {
   uint32_t now = HAL_GetTick();
   reasm_expire_old(now);
 
-  (void)can_bus_recover_if_bus_off();
-  can_tx_queue_service();
+  if (can_bus_recover_if_bus_off() == HAL_OK && !g_can_recovering)
+    can_tx_queue_service();
 
 #if CAN_BUS_POLLING
   if (g_hfdcan != NULL) {

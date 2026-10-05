@@ -12,6 +12,8 @@ typedef void (*can_bus_rx_cb_t)(const uint8_t *data, size_t len, void *user);
 
 /* Init with the FDCAN handle that receives on FIFO1 (e.g. &hfdcan2). */
 void can_bus_init(FDCAN_HandleTypeDef *hfdcan);
+/* False after initialization/recovery failure; watchdog must not be fed. */
+int can_bus_health_ok(void);
 
 /* Nonblocking raw hardware enqueue (len clamped to 64); HAL_BUSY if full. */
 HAL_StatusTypeDef can_bus_send_bytes(const uint8_t *bytes, size_t len, uint32_t std_id);
