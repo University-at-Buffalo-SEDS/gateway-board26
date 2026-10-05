@@ -27,7 +27,10 @@ uint32_t g_gateway_status_next[2];
 #ifndef GATEWAY_PACKET_ARENA_HANDLES
 #define GATEWAY_PACKET_ARENA_HANDLES 64U
 #endif
-volatile int32_t g_gateway_packet_store_init_result;
+#define BOARD_PACKET_ARENA_BYTES GATEWAY_PACKET_ARENA_BYTES
+#define BOARD_PACKET_ARENA_HANDLES GATEWAY_PACKET_ARENA_HANDLES
+#define g_board_packet_store_init_result g_gateway_packet_store_init_result
+#include "board_packet_store.h"
 SedsPacketStoreStats g_gateway_packet_store_stats;
 #endif
 #include "stm32g4xx_hal.h"
@@ -711,8 +714,7 @@ static SedsResult init_telemetry_router_locked(void) {
   seds_set_memory_admission_probe(telemetry_tlsf_admit);
 #endif
 #ifdef SEDS_ENABLE_COMPACT_PACKET_STORE
-  g_gateway_packet_store_init_result = seds_packet_store_configure(
-      GATEWAY_PACKET_ARENA_BYTES, GATEWAY_PACKET_ARENA_HANDLES, 512U);
+  (void)board_packet_store_init();
   if (g_gateway_packet_store_init_result != SEDS_OK) {
     printf("Error: compact packet arena does not fit allocator pool\r\n");
     return SEDS_IO;
