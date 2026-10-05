@@ -44,6 +44,13 @@ endif()
 add_executable(${CMAKE_PROJECT_NAME})
 include(cmake/tlsf_allocator.cmake)
 
+# Optional SEDSnet arena is enabled with SEDSNET_COMPACT_PACKET_STORE=ON.
+set(GATEWAY_PACKET_ARENA_BYTES "8192" CACHE STRING "Compact packet arena byte capacity")
+set(GATEWAY_PACKET_ARENA_HANDLES "64" CACHE STRING "Compact packet arena handle capacity")
+target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
+    GATEWAY_PACKET_ARENA_BYTES=${GATEWAY_PACKET_ARENA_BYTES}U
+    GATEWAY_PACKET_ARENA_HANDLES=${GATEWAY_PACKET_ARENA_HANDLES}U)
+
 # Both the gateway and its Pico-Fi peer must use the same UART baud rate.
 set(GATEWAY_PICO_UART_BAUD_RATE 115200 CACHE STRING "Gateway-to-Pico-Fi UART baud rate")
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE

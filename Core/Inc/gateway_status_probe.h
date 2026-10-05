@@ -23,6 +23,7 @@ static inline int gateway_probe_uleb(const uint8_t *p, size_t n, size_t *i, uint
   }
   return 0;
 }
+#ifdef GATEWAY_HIL_DIAGNOSTICS
 static inline void gateway_status_observe(unsigned stage, const uint8_t *p,
                                          size_t n, uint32_t status_type, uint32_t tick) {
   if(stage>=4) return;
@@ -77,4 +78,11 @@ classified:
 unknown:
   d->unknown++;
 }
+#else
+static inline void gateway_status_observe(unsigned stage, const uint8_t *p,
+                                         size_t n, uint32_t status_type, uint32_t tick) {
+  (void)stage; (void)p; (void)n; (void)status_type; (void)tick;
+}
+#endif
+
 #endif

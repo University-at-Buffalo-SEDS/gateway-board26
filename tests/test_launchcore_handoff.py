@@ -16,7 +16,8 @@ class LaunchCoreHandoffContract(unittest.TestCase):
         launchcore = (ROOT / "cmake/launchcore_stm32.cmake").read_text()
         sedsnet = (ROOT / "cmake/sedsnet_fetch.cmake").read_text()
         self.assertIn(f"GIT_TAG {FIXED_LAUNCHCORE}", launchcore)
-        self.assertIn(f"GIT_TAG {FIXED_SEDSNET}", sedsnet)
+        self.assertIn("GIT_TAG ${SEDSNET_GIT_REF}", sedsnet)
+        self.assertIn('set(SEDSNET_GIT_REF "main" CACHE STRING', (ROOT / "cmake/sedsnet_source.cmake").read_text())
 
     def test_bootloader_uses_stack_safe_application_handoff(self):
         cmake = (ROOT / "cmake/launchcore_stm32.cmake").read_text()
@@ -26,7 +27,8 @@ class LaunchCoreHandoffContract(unittest.TestCase):
 
     def test_network_stack_tracks_main(self):
         cmake = (ROOT / "cmake/sedsnet_fetch.cmake").read_text()
-        self.assertIn(f"GIT_TAG {FIXED_SEDSNET}", cmake)
+        self.assertIn("GIT_TAG ${SEDSNET_GIT_REF}", cmake)
+        self.assertIn('set(SEDSNET_GIT_REF "main" CACHE STRING', (ROOT / "cmake/sedsnet_source.cmake").read_text())
 
     def test_memory_report_uses_bsp_ram_capacity(self):
         cmake = (ROOT / "cmake/launchcore_stm32.cmake").read_text()

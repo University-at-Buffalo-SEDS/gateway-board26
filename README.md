@@ -92,3 +92,32 @@ ends must match. This is separate from the 115200-baud radio link. Hardware test
 show reduced CAN loss, not lossless service or indefinite OOM immunity. Soak tests
 must monitor forwarding, all board liveness, pressure refusals, allocator failures,
 and ring overruns together.
+
+## Experimental SEDSnet development builds
+
+Use `python3 build.py build --release --sedsnet-ref dev` to build the current
+SEDSnet `dev` commit. The same option is accepted by `test` and `flash`.
+Normal builds continue to select `main`. Each branch has its own source cache;
+when the network is unavailable the last usable on-disk source is retained.
+The selected revision is printed during configure. An explicit CMake source
+override remains local and is never fetched or reset.
+
+The compact packet arena is initialized before router startup with an 8 KiB
+payload budget and 64 handles, plus fixed startup metadata.
+It is separate from TLSF, which replaces only board-owned telemetry allocation
+hooks; ThreadX scheduling continues unchanged. The arena does not compact
+arbitrary application allocations, and queue parking remains uncompressed.
+
+```sh
+python3 build.py test --release --allocator tlsf --packet-store compact
+python3 build.py flash --release --allocator tlsf --packet-store compact \
+  --pico-baud 1000000 --method stm32prog-cli
+```
+
+`--packet-store compact` selects `dev` automatically. Both Pico UART ends must
+use the same baud; 1 Mbaud is the paired Pico build, independent of the 115200
+radio link. Add `--watchdog` to enable the board-owned watchdog and use its
+matching factory bootloader. `--packet-store heap` disables the arena.
+The new arena API must be present in an offline fallback; an older source is
+rejected clearly. This candidate is for testing; linked ten-minute qualification
+and a throughput claim remain pending.

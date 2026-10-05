@@ -14,10 +14,15 @@ set(SEDSNET_ENABLE_CRYPTOGRAPHY OFF CACHE BOOL
 
 include("${CMAKE_SOURCE_DIR}/cmake/sedsnet_source.cmake")
 
+if(SEDSNET_COMPACT_PACKET_STORE AND
+   NOT EXISTS "${SEDSNET_DIR}/src/packet_store.rs")
+    message(FATAL_ERROR "Selected SEDSnet source lacks the experimental packet arena; fetch dev online or provide a current local dev checkout")
+endif()
+
 FetchContent_Declare(
     sedsnet
     GIT_REPOSITORY https://github.com/Rylan-Meilutis/SEDSnet.git
-    GIT_TAG main
+    GIT_TAG ${SEDSNET_GIT_REF}
     GIT_SHALLOW FALSE
     PATCH_COMMAND ${CMAKE_COMMAND}
                   -DSEDSNET_SOURCE_DIR=<SOURCE_DIR>

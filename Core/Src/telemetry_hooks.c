@@ -108,9 +108,17 @@ static int str_contains_ci_n(const char *s, size_t n, const char *needle)
     return 0;
 }
 
-#ifndef TELEMETRY_USE_TLSF
-static void telemetry_memory_profile_sample(void)
+void telemetry_memory_profile_sample(void)
 {
+#ifdef TELEMETRY_USE_TLSF
+    extern volatile uint32_t g_telemetry_tlsf_active;
+    if (!g_telemetry_tlsf_active) return;
+    telemetry_tlsf_sample();
+    g_telemetry_pool_available = g_telemetry_tlsf_free_bytes;
+    g_telemetry_pool_fragments = g_telemetry_tlsf_free_blocks;
+    if (g_telemetry_pool_available < g_telemetry_pool_low_water)
+        g_telemetry_pool_low_water = g_telemetry_pool_available;
+#else
     ULONG available = 0U;
     ULONG fragments = 0U;
     ULONG emergency_available = 0U;
@@ -134,8 +142,8 @@ static void telemetry_memory_profile_sample(void)
         }
     }
 
-}
 #endif
+}
 
 void telemetry_set_byte_pool(TX_BYTE_POOL *pool)
 {

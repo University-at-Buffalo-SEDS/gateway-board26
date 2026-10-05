@@ -10,6 +10,7 @@ class StatusProbeTests(unittest.TestCase):
     def test_status_path_classification(self):
         code = r"""
 #include <assert.h>
+#define GATEWAY_HIL_DIAGNOSTICS 1
 #include "gateway_status_probe.h"
 volatile gateway_status_probe g_gateway_status_path[4];
 gateway_probe_template g_gateway_status_templates[2][GATEWAY_STATUS_TEMPLATE_CAPACITY];

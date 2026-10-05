@@ -366,6 +366,9 @@ class BuildConfig:
     project_name: str
     artifact: Optional[str]  # base name without extension (if known/forced)
 
+    packet_store: str = "heap"
+    pico_baud: int | None = None
+    sedsnet_ref: str = "main"
     watchdog: bool = False
     allocator: str = "threadx"
 
@@ -399,6 +402,7 @@ def configure_and_build(ui: UI, cfg: BuildConfig, target: str | None = None) -> 
     cfg.build_dir.mkdir(parents=True, exist_ok=True)
 
     allocator_flag = f"-DTELEMETRY_USE_TLSF={'ON' if cfg.allocator == 'tlsf' else 'OFF'}"
+    ui.say("info", f"Packet storage: {cfg.packet_store}; SEDSnet branch: {cfg.sedsnet_ref}")
     ui.say("info", f"Telemetry allocator: {cfg.allocator} (ThreadX scheduler)")
     telemetry_flag = f"-DENABLE_TELEMETRY={'ON' if cfg.telemetry else 'OFF'}"
     watchdog_flag = f"-DENABLE_BOARD_WATCHDOG={'ON' if cfg.watchdog else 'OFF'}"
@@ -413,6 +417,10 @@ def configure_and_build(ui: UI, cfg: BuildConfig, target: str | None = None) -> 
         f"-DCMAKE_TOOLCHAIN_FILE={str(cfg.toolchain_file)}",
         "-DCMAKE_COMMAND=cmake",
         watchdog_flag,
+        f"-DSEDSNET_GIT_REF={cfg.sedsnet_ref}",
+        f"-DSEDSNET_COMPACT_PACKET_STORE={'ON' if cfg.packet_store == 'compact' else 'OFF'}",
+        "-DSEDSNET_COMPACT_PACKET_COMPRESSION=OFF",
+        *([f"-DGATEWAY_PICO_UART_BAUD_RATE={cfg.pico_baud}"] if cfg.pico_baud else []),
         allocator_flag,
         telemetry_flag,
         simulator_flag,
@@ -776,6 +784,12 @@ def make_parser() -> argparse.ArgumentParser:
         mode.add_argument("--release", action="store_true", help="Release build.")
         sp.add_argument("--allocator", choices=["threadx", "tlsf"], default="threadx",
                         help="Telemetry allocator (default: threadx); scheduling always uses ThreadX.")
+        sp.add_argument("--packet-store", choices=["heap", "compact"], default="heap",
+                        help="Experimental compact arena selects SEDSnet dev unless --sedsnet-ref is supplied.")
+        sp.add_argument("--pico-baud", type=int, default=None,
+                        help="Gateway/Pico UART baud; must match the Pico firmware (paired build: 1000000).")
+        sp.add_argument("--sedsnet-ref", choices=["main", "dev"], default=None,
+                        help="SEDSnet branch; current remote commit is fetched, with offline fallback.")
         sp.add_argument("--no-telemetry", action="store_true", help="Configure with -DENABLE_TELEMETRY=OFF")
         sp.add_argument("--watchdog", action="store_true", help="Enable board-owned task-progress hardware watchdog (requires matching bootloader).")
         sp.add_argument("--image", choices=["firmware", "bootloader", "factory", "ota"],
@@ -845,11 +859,17 @@ def build_cfg_from_args(ui: UI, args: argparse.Namespace) -> BuildConfig:
         raise FriendlyError(f"Toolchain file not found: {toolchain}\n"
                             f"Pass --toolchain <path> to set it explicitly.")
 
+    if args.pico_baud is not None and args.pico_baud <= 0:
+        raise FriendlyError("--pico-baud must be positive")
+
     return BuildConfig(
         repo_root=repo_root,
         build_type=build_type,
         telemetry=not args.no_telemetry,
         watchdog=args.watchdog,
+        packet_store=args.packet_store,
+        pico_baud=args.pico_baud,
+        sedsnet_ref=args.sedsnet_ref or ("dev" if args.packet_store == "compact" else "main"),
         allocator=args.allocator,
         generator=args.generator,
         toolchain_file=toolchain,

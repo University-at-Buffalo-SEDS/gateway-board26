@@ -30,6 +30,10 @@ static struct {
  uint32_t tx_started_ms,tx_frame_count;
 } g_telemetry_uart;
 static uint32_t g_gateway_uart_tx_queue_drops,g_gateway_uart_tx_enqueued,g_gateway_uart_tx_pending,g_gateway_uart_tx_high_water,g_gateway_uart_tx_frames,g_gateway_uart_tx_failures,g_gateway_uart_tx_exhausted,g_gateway_uart_tx_retry_count;
+#ifdef SEDS_FIRMWARE_SIM_TEST
+static uint32_t g_sim_uart_umbilical_status_count;
+static uint32_t sim_probe_packed_data_type(const uint8_t *p,size_t len){assert(p && len==1);return SEDS_DT_UMBILICAL_STATUS;}
+#endif
 static uint32_t tick,starts,aborts;static int start_status;
 static uint8_t *owned;static unsigned owned_len;
 static uint32_t telemetry_uart_irq_save(void){return 0;}
@@ -60,10 +64,14 @@ int main(void){
  tick=60;telemetry_uart_flush_tx_queue();assert(owned && g_gateway_uart_tx_retry_count==3);
  complete();assert(g_gateway_uart_tx_frames==7);
  assert(!telemetry_uart_enqueue_frame(0xa5,&x,1025));
+#ifdef SEDS_FIRMWARE_SIM_TEST
+ assert(g_sim_uart_umbilical_status_count==7);
+#endif
 }
 '''
   with tempfile.TemporaryDirectory() as d:
    p=Path(d); (p/'test.c').write_text(code)
-   subprocess.run(['cc','-std=c11','-Wall','-Wextra','-Werror',str(p/'test.c'),'-o',str(p/'test')],check=True)
-   subprocess.run([str(p/'test')],check=True)
+   for flags in [[], ['-DSEDS_FIRMWARE_SIM_TEST=1']]:
+    subprocess.run(['cc','-std=c11','-Wall','-Wextra','-Werror',*flags,str(p/'test.c'),'-o',str(p/'test')],check=True)
+    subprocess.run([str(p/'test')],check=True)
 if __name__=='__main__':unittest.main()

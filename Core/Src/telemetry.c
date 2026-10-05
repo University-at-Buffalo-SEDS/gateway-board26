@@ -6,9 +6,11 @@
 #include "flight_state_cache.h"
 #include "sim_network_probe.h"
 #include "gateway_status_probe.h"
+#ifdef GATEWAY_HIL_DIAGNOSTICS
 volatile gateway_status_probe g_gateway_status_path[4];
 gateway_probe_template g_gateway_status_templates[2][GATEWAY_STATUS_TEMPLATE_CAPACITY];
 uint32_t g_gateway_status_next[2];
+#endif
 #include "ota_stream.h"
 
 #include "app_threadx.h"
@@ -18,6 +20,16 @@ uint32_t g_gateway_status_next[2];
 #include "can_bus.h"
 #include "main.h"
 #include "sedsnet_config.h"
+#ifdef SEDS_ENABLE_COMPACT_PACKET_STORE
+#ifndef GATEWAY_PACKET_ARENA_BYTES
+#define GATEWAY_PACKET_ARENA_BYTES 8192U
+#endif
+#ifndef GATEWAY_PACKET_ARENA_HANDLES
+#define GATEWAY_PACKET_ARENA_HANDLES 64U
+#endif
+volatile int32_t g_gateway_packet_store_init_result;
+SedsPacketStoreStats g_gateway_packet_store_stats;
+#endif
 #include "stm32g4xx_hal.h"
 #include "telemetry_uart.h"
 
@@ -563,6 +575,19 @@ static UNUSED_FUNCTION void rx_synchronous(const uint8_t *bytes, size_t len) {
 }
 
 static void telemetry_update_network_health(SedsRouter *router) {
+#if defined(SEDS_FIRMWARE_SIM_TEST) && defined(TELEMETRY_USE_TLSF)
+  /* Qualification snapshots are infrequent; packet admission stays bounded. */
+  extern void telemetry_memory_profile_sample(void);
+  static uint32_t last_sample_ms;
+  const uint32_t now_ms = HAL_GetTick();
+  if ((uint32_t)(now_ms - last_sample_ms) >= 1000U) {
+    last_sample_ms = now_ms;
+    telemetry_memory_profile_sample();
+  }
+#endif
+#ifdef SEDS_ENABLE_COMPACT_PACKET_STORE
+  (void)seds_packet_store_stats(&g_gateway_packet_store_stats);
+#endif
   uint64_t network_time_ms = 0ULL;
   if (seds_router_get_network_time_ms(router, &network_time_ms) == SEDS_OK) {
     g_telemetry_timesync_valid = 1U;
@@ -684,6 +709,14 @@ static SedsResult init_telemetry_router_locked(void) {
    * discovery; the gateway must not advertise remote endpoints as local. */
 #ifdef TELEMETRY_USE_TLSF
   seds_set_memory_admission_probe(telemetry_tlsf_admit);
+#endif
+#ifdef SEDS_ENABLE_COMPACT_PACKET_STORE
+  g_gateway_packet_store_init_result = seds_packet_store_configure(
+      GATEWAY_PACKET_ARENA_BYTES, GATEWAY_PACKET_ARENA_HANDLES, 512U);
+  if (g_gateway_packet_store_init_result != SEDS_OK) {
+    printf("Error: compact packet arena does not fit allocator pool\r\n");
+    return SEDS_IO;
+  }
 #endif
   r = seds_router_new(node_now_since_ms, NULL, NULL, 0U);
   if (!r) {

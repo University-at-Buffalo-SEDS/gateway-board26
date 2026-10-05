@@ -560,7 +560,9 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart) {
         g_telemetry_uart.tx_lengths[slot] - TELEMETRY_UART_HEADER_SIZE,
         SEDS_DT_UMBILICAL_STATUS, tx_time_get());
 #ifdef SEDS_FIRMWARE_SIM_TEST
-    if (sim_probe_packed_data_type(g_telemetry_uart.tx_payloads[slot] + TELEMETRY_UART_HEADER_SIZE)
+    if (sim_probe_packed_data_type(
+            g_telemetry_uart.tx_payloads[slot] + TELEMETRY_UART_HEADER_SIZE,
+            g_telemetry_uart.tx_lengths[slot] - TELEMETRY_UART_HEADER_SIZE)
         == (uint32_t)SEDS_DT_UMBILICAL_STATUS) g_sim_uart_umbilical_status_count++;
 #endif
     g_telemetry_uart.tx_active = 0U;

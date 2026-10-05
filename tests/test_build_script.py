@@ -9,6 +9,26 @@ import build
 
 
 class OtaBuildScriptTests(unittest.TestCase):
+    def test_compact_flash_selects_dev_and_forwards_storage_and_baud(self):
+        args = build.make_parser().parse_args(["flash", "--release", "--packet-store", "compact",
+                    "--allocator", "tlsf", "--pico-baud", "1000000", "--method", "stm32prog-cli"])
+        cfg = build.build_cfg_from_args(mock.Mock(), args)
+        self.assertEqual(cfg.sedsnet_ref, "dev")
+        self.assertEqual(cfg.packet_store, "compact")
+        self.assertEqual(cfg.allocator, "tlsf")
+        with mock.patch.object(build, "run") as execute, mock.patch.object(build, "pick_elf", return_value=Path("/tmp/test.elf")):
+            build.configure_and_build(mock.Mock(), cfg)
+        configure = execute.call_args_list[0].args[1]
+        for flag in ("-DSEDSNET_GIT_REF=dev", "-DSEDSNET_COMPACT_PACKET_STORE=ON",
+                     "-DTELEMETRY_USE_TLSF=ON", "-DGATEWAY_PICO_UART_BAUD_RATE=1000000"):
+            self.assertIn(flag, configure)
+        normal = build.build_cfg_from_args(mock.Mock(), build.make_parser().parse_args(["build", "--release"]))
+        self.assertEqual(normal.packet_store, "heap")
+        self.assertEqual(normal.sedsnet_ref, "main")
+        args.pico_baud = 0
+        with self.assertRaisesRegex(build.FriendlyError, "positive"):
+            build.build_cfg_from_args(mock.Mock(), args)
+
     def test_clean_command_removes_all_or_selected_build_artifacts(self):
         self.assertEqual(build.make_parser().parse_args(["clean"]).cmd, "clean")
         ui = mock.Mock()
