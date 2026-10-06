@@ -233,9 +233,12 @@ bool telemetry_tlsf_admit(size_t additional, size_t largest)
         if (largest > tlsf_block_size_max() - 64U) {
             allowed = false;
         } else {
-            /* The two slot allocations may round up beyond the caller's
-             * estimate. Preserve that extra headroom before admitting work. */
-            const bool slot_available = reserve_find(largest) >= 0;
+            /* A discovery snapshot clones many small strings, not just its
+             * largest block. If TLSF cannot supply scratch, the fallback
+             * must cover the full operation budget plus the control reserve. */
+            const size_t reserve_free = RESERVE_BLOCK_BYTES * RESERVE_BLOCK_COUNT - reserve_live_bytes;
+            const bool slot_available = reserve_find(largest) >= 0 &&
+                additional <= reserve_free && reserve <= reserve_free - additional;
             const size_t padding = slot_available ?
                 ((largest + RESERVE_BLOCK_BYTES - 1U) / RESERVE_BLOCK_BYTES) * RESERVE_BLOCK_BYTES - largest : 0U;
             void *scratch = tlsf_memalign(allocator, 8U, largest);

@@ -83,7 +83,8 @@ int main(int argc,char**argv){
   assert(g_gateway_large_slot_live==0);
   // The ordinary fragmented heap cannot satisfy even the captured 676-byte request.
   void *ordinary=tlsf_memalign(allocator,8,676);assert(!ordinary);
-  assert(telemetry_tlsf_admit(8192,2048));
+  assert(!telemetry_tlsf_admit(8192,2048));
+  assert(telemetry_tlsf_admit(4096,2048));
   void *decode=telemetry_tlsf_malloc(2048),*nested=telemetry_tlsf_malloc(4096);
   assert(decode&&nested&&decode!=nested&&g_gateway_large_slot_live==2);
   memset(decode,0x6b,2048);memset(nested,0x7c,4096);
@@ -93,7 +94,7 @@ int main(int argc,char**argv){
   // A tiny frame estimate must not admit work whose owned object needs 676 B.
   assert(!telemetry_tlsf_admit(384,160));
   telemetry_tlsf_free(guard_block);telemetry_tlsf_free(medium);
-  telemetry_tlsf_free(decode);assert(telemetry_tlsf_admit(8192,2048));
+  telemetry_tlsf_free(decode);assert(!telemetry_tlsf_admit(8192,2048));
   decode=telemetry_tlsf_malloc(2048);assert(decode);
   for(unsigned j=0;j<4096;j++)assert(((unsigned char*)nested)[j]==0x7c);
   telemetry_tlsf_free(decode);telemetry_tlsf_free(nested);
