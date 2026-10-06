@@ -36,6 +36,7 @@ UINT tx_byte_pool_info_get(TX_BYTE_POOL*,void*,ULONG*,ULONG*,void*,void*,void*);
 #include <stdlib.h>
 #include "telemetry_tlsf.h"
 #include "tlsf.h"
+#include "telemetry_tlsf.c"
 uint32_t mock_irq;
 static unsigned calls, fail_init;
 void Error_Handler(void){abort();}
@@ -57,9 +58,44 @@ static uint64_t arenas[3][4096];
 int main(int argc,char**argv){
  (void)argv;TX_BYTE_POOL pools[3];
  for(unsigned i=0;i<3;i++){pools[i]=(TX_BYTE_POOL){(unsigned char*)arenas[i],0,sizeof(arenas[i])};telemetry_tlsf_register_pool(&pools[i]);}
- if(argc>1){fail_init=1;assert(!telemetry_tlsf_malloc(32));assert(g_telemetry_tlsf_init_failed);assert(!g_telemetry_tlsf_active);assert(mock_irq==0);return 0;}
+ if(argc>1 && strcmp(argv[1],"init-failure")==0){fail_init=1;assert(!telemetry_tlsf_malloc(32));assert(g_telemetry_tlsf_init_failed);assert(!g_telemetry_tlsf_active);assert(mock_irq==0);return 0;}
  void *first=telemetry_tlsf_malloc(0);assert(first&&g_telemetry_tlsf_active);telemetry_tlsf_free(first);
  assert(!telemetry_tlsf_malloc(SIZE_MAX));
+ if(argc>1 && strcmp(argv[1],"fragmentation")==0){
+  // Reproduce plentiful free bytes with no decode-sized contiguous TLSF block.
+  void *keepers[256]={0},*temporary[256]={0};unsigned count=0;
+  for(;count<256;count++){
+   keepers[count]=telemetry_tlsf_malloc(768);
+   if(!keepers[count])break;
+   memset(keepers[count],0x5a,768);
+   temporary[count]=telemetry_tlsf_malloc(1024);
+   if(!temporary[count]){count++;break;}
+  }
+  assert(count>20);
+  for(unsigned i=0;i<count;i++)telemetry_tlsf_free(temporary[i]);
+  void *held0=telemetry_tlsf_malloc(2048),*held1=telemetry_tlsf_malloc(2048);
+  assert(held0&&held1);void *tails[128];unsigned tail_count=0;
+  while(tail_count<128&&(tails[tail_count]=telemetry_tlsf_malloc(2048)))tail_count++;
+  telemetry_tlsf_free(held0);telemetry_tlsf_free(held1);
+  // The ordinary fragmented heap cannot satisfy the observed 2 KiB decode.
+  void *ordinary=tlsf_memalign(allocator,8,2048);assert(!ordinary);
+  assert(telemetry_tlsf_admit(8192,2048));
+  void *decode=telemetry_tlsf_malloc(2048),*nested=telemetry_tlsf_malloc(4096);
+  assert(decode&&nested&&decode!=nested&&g_gateway_large_slot_live==2);
+  memset(decode,0x6b,2048);memset(nested,0x7c,4096);
+  assert(!telemetry_tlsf_admit(8192,2048));
+  telemetry_tlsf_free(decode);assert(telemetry_tlsf_admit(8192,2048));
+  decode=telemetry_tlsf_malloc(2048);assert(decode);
+  for(unsigned i=0;i<count;i++){
+   for(unsigned j=0;j<768;j++)assert(((unsigned char*)keepers[i])[j]==0x5a);
+   telemetry_tlsf_free(keepers[i]);
+  }
+  for(unsigned j=0;j<4096;j++)assert(((unsigned char*)nested)[j]==0x7c);
+  telemetry_tlsf_free(decode);telemetry_tlsf_free(nested);
+  for(unsigned i=0;i<tail_count;i++)telemetry_tlsf_free(tails[i]);
+  assert(!g_gateway_large_slot_live&&!g_telemetry_tlsf_live_bytes);
+  assert(telemetry_tlsf_admit(8192,8192));return 0;
+ }
  const uint32_t initial_free=g_telemetry_tlsf_free_bytes, initial_largest=g_telemetry_tlsf_largest_free;
  const unsigned startup_calls=calls;
  assert(telemetry_tlsf_admit(4096, 2048));
@@ -106,6 +142,7 @@ int main(int argc,char**argv){
 }
 ''')
             exe=str(p/'test')
-            subprocess.run(['cc','-std=c11','-g','-fsanitize=address,undefined','-I',tmp,'-I',str(ROOT/'Core/Inc'),'-I',str(ROOT/'third_party/tlsf'),str(p/'test.c'),str(ROOT/'Core/Src/telemetry_tlsf.c'),str(ROOT/'third_party/tlsf/tlsf.c'),'-o',exe],check=True)
+            subprocess.run(['cc','-std=c11','-g','-fsanitize=address,undefined','-I',tmp,'-I',str(ROOT/'Core/Inc'),'-I',str(ROOT/'Core/Src'),'-I',str(ROOT/'third_party/tlsf'),str(p/'test.c'),str(ROOT/'third_party/tlsf/tlsf.c'),'-o',exe],check=True)
             subprocess.run([exe],check=True)
             subprocess.run([exe,'init-failure'],check=True)
+            subprocess.run([exe,'fragmentation'],check=True)

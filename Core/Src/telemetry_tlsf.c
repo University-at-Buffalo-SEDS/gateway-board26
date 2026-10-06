@@ -13,6 +13,39 @@ volatile uint32_t g_telemetry_tlsf_region_bytes;
 volatile uint32_t g_telemetry_tlsf_control_bytes;
 volatile uint32_t g_telemetry_tlsf_live_bytes;
 static uint32_t live_allocations;
+/* Keep decode-sized blocks out of the small-packet allocation stream. These
+ * slots are carved from the existing pool, not additional static RAM. */
+#define LARGE_SLOT_BYTES 4096U
+#define LARGE_SLOT_COUNT 2U
+#define LARGE_SLOT_MIN 2048U
+static uint8_t *large_slots;
+static unsigned large_slot_mask;
+volatile uint32_t g_gateway_large_slot_live;
+volatile uint32_t g_gateway_large_slot_peak;
+volatile uint32_t g_gateway_admission_last_additional;
+volatile uint32_t g_gateway_admission_last_largest;
+
+static void *large_slot_allocate(size_t size)
+{
+    if (!large_slots || size < LARGE_SLOT_MIN || size > LARGE_SLOT_BYTES) return NULL;
+    for (unsigned i = 0; i < LARGE_SLOT_COUNT; ++i) {
+        if ((large_slot_mask & (1U << i)) == 0U) {
+            large_slot_mask |= 1U << i;
+            ++g_gateway_large_slot_live;
+            if (g_gateway_large_slot_live > g_gateway_large_slot_peak)
+                g_gateway_large_slot_peak = g_gateway_large_slot_live;
+            return large_slots + i * LARGE_SLOT_BYTES;
+        }
+    }
+    return NULL;
+}
+static int large_slot_index(void *ptr)
+{
+    const uintptr_t address = (uintptr_t)ptr, start = (uintptr_t)large_slots;
+    if (!large_slots || address < start || address >= start + LARGE_SLOT_COUNT * LARGE_SLOT_BYTES)
+        return -1;
+    return (address - start) / LARGE_SLOT_BYTES;
+}
 volatile uint32_t g_gateway_memory_admission_drops;
 volatile uint32_t g_telemetry_tlsf_peak_bytes;
 volatile uint32_t g_telemetry_tlsf_failure_request;
@@ -52,6 +85,13 @@ static void snapshot(void)
     g_telemetry_tlsf_free_blocks = 0;
     for (unsigned i = 0; i < region_count; ++i)
         tlsf_walk_pool(regions[i], snapshot_block, NULL);
+    const uint32_t free_slots = LARGE_SLOT_COUNT - g_gateway_large_slot_live;
+    if (large_slots && free_slots) {
+        g_telemetry_tlsf_free_bytes += free_slots * LARGE_SLOT_BYTES;
+        g_telemetry_tlsf_free_blocks += free_slots;
+        if (g_telemetry_tlsf_largest_free < LARGE_SLOT_BYTES)
+            g_telemetry_tlsf_largest_free = LARGE_SLOT_BYTES;
+    }
 }
 static int initialize(void)
 {
@@ -83,6 +123,11 @@ static int initialize(void)
         regions[region_count++] = region;
         g_telemetry_tlsf_region_bytes += bytes;
     }
+    large_slots = tlsf_memalign(allocator, 8U, LARGE_SLOT_COUNT * LARGE_SLOT_BYTES);
+    if (!large_slots) goto fail;
+    /* Reserve ownership overhead/padding conservatively in admission accounting. */
+    g_telemetry_tlsf_region_bytes -= tlsf_block_size(large_slots) -
+        LARGE_SLOT_COUNT * LARGE_SLOT_BYTES + 2U * sizeof(void *);
     g_telemetry_tlsf_active = 1;
     snapshot();
     return 1;
@@ -95,11 +140,13 @@ void *telemetry_tlsf_malloc(size_t size)
     const uint32_t saved = __get_PRIMASK();
     __disable_irq();
     void *ptr = NULL;
-    if (initialize() && size <= tlsf_block_size_max() - 64U)
-        ptr = tlsf_memalign(allocator, 8U, size ? size : 1U);
+    if (initialize() && size <= tlsf_block_size_max() - 64U) {
+        ptr = large_slot_allocate(size);
+        if (!ptr) ptr = tlsf_memalign(allocator, 8U, size ? size : 1U);
+    }
     if (ptr) {
         ++live_allocations;
-        g_telemetry_tlsf_live_bytes += tlsf_block_size(ptr);
+        g_telemetry_tlsf_live_bytes += large_slot_index(ptr) >= 0 ? LARGE_SLOT_BYTES : tlsf_block_size(ptr);
         if (g_telemetry_tlsf_live_bytes > g_telemetry_tlsf_peak_bytes)
             g_telemetry_tlsf_peak_bytes = g_telemetry_tlsf_live_bytes;
     } else {
@@ -116,8 +163,15 @@ void telemetry_tlsf_free(void *ptr)
     const uint32_t saved = __get_PRIMASK();
     __disable_irq();
     --live_allocations;
-    g_telemetry_tlsf_live_bytes -= tlsf_block_size(ptr);
-    tlsf_free(allocator, ptr);
+    const int slot = large_slot_index(ptr);
+    if (slot >= 0) {
+        large_slot_mask &= ~(1U << (unsigned)slot);
+        --g_gateway_large_slot_live;
+        g_telemetry_tlsf_live_bytes -= LARGE_SLOT_BYTES;
+    } else {
+        g_telemetry_tlsf_live_bytes -= tlsf_block_size(ptr);
+        tlsf_free(allocator, ptr);
+    }
     __set_PRIMASK(saved);
 }
 
@@ -149,12 +203,24 @@ bool telemetry_tlsf_admit(size_t additional, size_t largest)
         if (largest > tlsf_block_size_max() - 64U) {
             allowed = false;
         } else {
-            void *scratch = tlsf_memalign(allocator, 8U, largest);
-            allowed = scratch != NULL;
-            if (scratch) tlsf_free(allocator, scratch);
+            /* The two slot allocations may round up beyond the caller's
+             * estimate. Preserve that extra headroom before admitting work. */
+            const bool slot_available = largest >= LARGE_SLOT_MIN && largest <= LARGE_SLOT_BYTES &&
+                g_gateway_large_slot_live < LARGE_SLOT_COUNT;
+            const size_t padding = slot_available ? LARGE_SLOT_BYTES - largest : 0U;
+            allowed = padding <= available - additional - reserve;
+            if (allowed && !slot_available) {
+                void *scratch = tlsf_memalign(allocator, 8U, largest);
+                allowed = scratch != NULL;
+                if (scratch) tlsf_free(allocator, scratch);
+            }
         }
     }
-    if (!allowed) ++g_gateway_memory_admission_drops;
+    if (!allowed) {
+        ++g_gateway_memory_admission_drops;
+        g_gateway_admission_last_additional = additional;
+        g_gateway_admission_last_largest = largest;
+    }
     __set_PRIMASK(saved);
     return allowed;
 }

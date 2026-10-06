@@ -110,7 +110,14 @@ payloads when optional arena parking cannot fit them; queue and allocator
 admission bounds still apply. Use `--packet-store heap` with TLSF for the
 current recovery configuration; the smaller arena remains experimental.
 It is separate from TLSF, which replaces only board-owned telemetry allocation
-hooks; ThreadX scheduling continues unchanged. The arena does not compact
+hooks; ThreadX scheduling continues unchanged. The gateway reserves two 4 KiB
+allocation slots from the existing TLSF pool for requests of 2,048–4,096 bytes.
+Small packets cannot fragment these blocks; larger requests and slot exhaustion
+fall back to the ordinary heap, subject to the same admission checks. This
+protects discovery decode headroom without adding static RAM or moving live
+pointers. `g_gateway_large_slot_live` / `g_gateway_large_slot_peak` and
+`g_gateway_admission_last_additional` / `g_gateway_admission_last_largest`
+expose occupancy and the last refused demand. The arena does not compact
 arbitrary application allocations, and queue parking remains uncompressed.
 
 ```sh
