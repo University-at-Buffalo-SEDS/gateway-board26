@@ -6,6 +6,7 @@
 #include "flight_state_cache.h"
 #include "sim_network_probe.h"
 #include "gateway_status_probe.h"
+volatile uint32_t g_gateway_protocol_ack_path[4];
 #ifdef GATEWAY_HIL_DIAGNOSTICS
 volatile gateway_status_probe g_gateway_status_path[4];
 gateway_probe_template g_gateway_status_templates[2][GATEWAY_STATUS_TEMPLATE_CAPACITY];
@@ -22,10 +23,10 @@ uint32_t g_gateway_status_next[2];
 #include "sedsnet_config.h"
 #ifdef SEDS_ENABLE_COMPACT_PACKET_STORE
 #ifndef GATEWAY_PACKET_ARENA_BYTES
-#define GATEWAY_PACKET_ARENA_BYTES 8192U
+#define GATEWAY_PACKET_ARENA_BYTES 2048U
 #endif
 #ifndef GATEWAY_PACKET_ARENA_HANDLES
-#define GATEWAY_PACKET_ARENA_HANDLES 64U
+#define GATEWAY_PACKET_ARENA_HANDLES 16U
 #endif
 #define BOARD_PACKET_ARENA_BYTES GATEWAY_PACKET_ARENA_BYTES
 #define BOARD_PACKET_ARENA_HANDLES GATEWAY_PACKET_ARENA_HANDLES

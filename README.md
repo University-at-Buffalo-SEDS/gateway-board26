@@ -52,7 +52,7 @@ Open the checked-in `.ioc` file and generate with the CMake toolchain. Keep user
 code enabled. The `.ioc` is the source of truth for the ThreadX and USBX pool
 sizes; unit tests compare those values with the generated Azure RTOS headers so
 regeneration cannot silently shrink, grow, or repartition the pools.
-The application pool is 72 KiB (73,728 bytes), including additional headroom
+The application pool is 74 KiB (75,776 bytes), including additional headroom
 for full-network discovery bursts; the separate large-allocation emergency
 pool remains 16 KiB. Qualification retains the 1 KiB minimum normal-pool
 reserve rather than accepting near-exhaustion as a passing result.
@@ -102,8 +102,13 @@ when the network is unavailable the last usable on-disk source is retained.
 The selected revision is printed during configure. An explicit CMake source
 override remains local and is never fetched or reset.
 
-The compact packet arena is initialized before router startup with an 8 KiB
-payload budget and 64 handles, plus fixed startup metadata.
+The compact packet arena is initialized before router startup with a 2 KiB
+payload budget and 16 handles, plus fixed startup metadata.
+The previous 8 KiB/64-handle arena reserved 10 KiB while empty and could
+starve discovery on real hardware. SEDSnet 4.1.3 retains existing heap
+payloads when optional arena parking cannot fit them; queue and allocator
+admission bounds still apply. Use `--packet-store heap` with TLSF for the
+current recovery configuration; the smaller arena remains experimental.
 It is separate from TLSF, which replaces only board-owned telemetry allocation
 hooks; ThreadX scheduling continues unchanged. The arena does not compact
 arbitrary application allocations, and queue parking remains uncompressed.
@@ -116,7 +121,7 @@ python3 build.py flash --release --allocator tlsf --packet-store compact \
 
 `--packet-store compact` selects `dev` automatically. Both Pico UART ends must
 use the same baud; 1 Mbaud is the paired Pico build, independent of the 115200
-radio link. Add `--watchdog` to enable the board-owned watchdog and use its
+radio link. The board-owned watchdog is enabled by default; use its
 matching factory bootloader. `--packet-store heap` disables the arena.
 The new arena API must be present in an offline fallback; an older source is
 rejected clearly. This candidate is for testing; linked ten-minute qualification

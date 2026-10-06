@@ -23,9 +23,24 @@ static inline int gateway_probe_uleb(const uint8_t *p, size_t n, size_t *i, uint
   }
   return 0;
 }
+/* Four passive protocol-ACK counters cost 16 bytes in production. Counts
+ * describe observed envelopes, not CRC validation or successful delivery. */
+extern volatile uint32_t g_gateway_protocol_ack_path[4];
+static inline void gateway_protocol_ack_observe(unsigned stage, const uint8_t *p, size_t n) {
+  if(stage>=4 || !p || n<16U) return;
+  if(p[0]=='S' && p[1]=='D' && p[2]=='T') {
+    if(p[3]!=1U) return; /* A compact reference cannot be classified here. */
+    size_t i=4U; uint64_t ignored;
+    if(!gateway_probe_uleb(p,n,&i,&ignored) || n-i<16U) return;
+    p+=i; n-=i;
+  }
+  /* Canonical type 1 is the stable SEDSNET_RELIABLE_ACK internal ID. */
+  if(n>=16U && p[2]==1U) ++g_gateway_protocol_ack_path[stage];
+}
 #ifdef GATEWAY_HIL_DIAGNOSTICS
 static inline void gateway_status_observe(unsigned stage, const uint8_t *p,
                                          size_t n, uint32_t status_type, uint32_t tick) {
+  gateway_protocol_ack_observe(stage,p,n);
   if(stage>=4) return;
   volatile gateway_status_probe *d=&g_gateway_status_path[stage];
   unsigned channel=stage==0 ? 0 : 1;
@@ -81,7 +96,8 @@ unknown:
 #else
 static inline void gateway_status_observe(unsigned stage, const uint8_t *p,
                                          size_t n, uint32_t status_type, uint32_t tick) {
-  (void)stage; (void)p; (void)n; (void)status_type; (void)tick;
+  gateway_protocol_ack_observe(stage,p,n);
+  (void)status_type; (void)tick;
 }
 #endif
 

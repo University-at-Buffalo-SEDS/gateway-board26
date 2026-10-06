@@ -13,6 +13,7 @@ class StatusProbeTests(unittest.TestCase):
 #define GATEWAY_HIL_DIAGNOSTICS 1
 #include "gateway_status_probe.h"
 volatile gateway_status_probe g_gateway_status_path[4];
+volatile uint32_t g_gateway_protocol_ack_path[4];
 gateway_probe_template g_gateway_status_templates[2][GATEWAY_STATUS_TEMPLATE_CAPACITY];
 uint32_t g_gateway_status_next[2];
 static size_t put(uint8_t *p, uint32_t v) {
@@ -47,6 +48,13 @@ int main(void) {
   n=10; n+=put(p+n,483403151U);
   gateway_status_observe(0,p,n,42,108);
   assert(g_gateway_status_path[0].actuator_status==1);
+  uint8_t ack[32]={4,1,1,8,1};
+  gateway_status_observe(0,ack,sizeof ack,42,109);
+  gateway_status_observe(1,ack,sizeof ack,42,110);
+  gateway_status_observe(2,ack,sizeof ack,42,111);
+  assert(g_gateway_protocol_ack_path[0]==1 && g_gateway_protocol_ack_path[1]==1 && g_gateway_protocol_ack_path[2]==1);
+  for(size_t j=0;j<16;j++) gateway_status_observe(3,ack,j,42,0);
+  assert(g_gateway_protocol_ack_path[3]==0);
   gateway_status_observe(4,0,0,42,0);
   assert(sizeof(g_gateway_status_path)+sizeof(g_gateway_status_templates)+sizeof(g_gateway_status_next)==296);
 }
