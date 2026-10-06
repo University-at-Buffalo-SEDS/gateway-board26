@@ -205,13 +205,12 @@ float LTC2990_Code_To_Single_Ended_Voltage(LTC2990_Handle_t *handle, uint16_t co
 float LTC2990_Code15_To_CurrentA(uint16_t raw15)
 {
     const float a_per_count = 19.42e-6f / (RSENSE_OHM * CURRENT_DIVIDER_RATIO);
-    const uint16_t magnitude = raw15 & 0x3FFFU;
-
-    if ((raw15 & 0x4000U) != 0U) {
-        return -((float)magnitude + 1.0f) * a_per_count;
+    /* D14 is the sign of a 15-bit two's-complement result; D15 is valid. */
+    int32_t code = (int32_t)(raw15 & 0x7FFFU);
+    if (code >= 0x4000) {
+        code -= 0x8000;
     }
-
-    return (float)magnitude * a_per_count;
+    return (float)code * a_per_count;
 }
 
 

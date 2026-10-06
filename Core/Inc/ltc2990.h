@@ -33,7 +33,7 @@
 #define CTRL_V1_ONLY        (1u << 3)   // b[4:3] = 01 
 
 #define SINGLE_ENDED_LSB    (5.0f / 16384.0f)  // 5V  2^14
-#define VBATT_DIVIDER_TOP_OHM       (71500.0f)
+#define VBATT_DIVIDER_TOP_OHM       (91000.0f)
 #define VBATT_DIVIDER_BOTTOM_OHM    (10000.0f)
 #define VBATT_DIVIDER_GAIN          ((VBATT_DIVIDER_TOP_OHM + VBATT_DIVIDER_BOTTOM_OHM) / \
                                      VBATT_DIVIDER_BOTTOM_OHM)
