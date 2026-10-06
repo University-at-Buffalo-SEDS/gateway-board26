@@ -83,7 +83,10 @@ int main(int argc,char**argv){
   assert(g_gateway_large_slot_live==0);
   // The ordinary fragmented heap cannot satisfy even the captured 676-byte request.
   void *ordinary=tlsf_memalign(allocator,8,676);assert(!ordinary);
-  assert(!telemetry_tlsf_admit(8192,2048));
+  // Discovery must use fragmented small blocks plus its large fallback buffer.
+  const uint32_t before_bitmap=reserve_used, before_live=g_telemetry_tlsf_live_bytes;
+  assert(telemetry_tlsf_admit(8192,2048));
+  assert(reserve_used==before_bitmap&&g_telemetry_tlsf_live_bytes==before_live);
   assert(telemetry_tlsf_admit(4096,2048));
   void *decode=telemetry_tlsf_malloc(2048),*nested=telemetry_tlsf_malloc(4096);
   assert(decode&&nested&&decode!=nested&&g_gateway_large_slot_live==2);

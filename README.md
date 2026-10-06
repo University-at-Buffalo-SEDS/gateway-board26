@@ -115,6 +115,11 @@ using 32 blocks of 256 bytes. Ordinary allocation is attempted first; failed
 requests up to 8 KiB can claim a contiguous run of fallback blocks. This covers
 both the captured 676-byte OOM and discovery decode scratch without moving live
 pointers or adding another payload copy. Pool exhaustion still rejects admission.
+When ordinary scratch allocation fails, admission checks the fallback capacity
+for the largest buffer and control reserve, and temporarily probes the remaining
+budget in ordinary 128-byte blocks (at most 128 probes). It frees every probe
+before returning. This prevents both fallback exhaustion and permanent discovery
+starvation when smaller free blocks remain.
 `g_gateway_large_slot_live` / `g_gateway_large_slot_peak` count live/peak fallback
 allocations; `g_gateway_admission_last_additional` / `g_gateway_admission_last_largest`
 record the last refused demand. The arena does not compact

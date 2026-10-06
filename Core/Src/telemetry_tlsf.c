@@ -235,10 +235,11 @@ bool telemetry_tlsf_admit(size_t additional, size_t largest)
         } else {
             /* A discovery snapshot clones many small strings, not just its
              * largest block. If TLSF cannot supply scratch, the fallback
-             * must cover the full operation budget plus the control reserve. */
+             * must cover its largest buffer and control reserve; ordinary
+             * fragmented blocks must cover the remaining operation budget. */
             const size_t reserve_free = RESERVE_BLOCK_BYTES * RESERVE_BLOCK_COUNT - reserve_live_bytes;
             const bool slot_available = reserve_find(largest) >= 0 &&
-                additional <= reserve_free && reserve <= reserve_free - additional;
+                largest <= reserve_free && reserve <= reserve_free - largest;
             const size_t padding = slot_available ?
                 ((largest + RESERVE_BLOCK_BYTES - 1U) / RESERVE_BLOCK_BYTES) * RESERVE_BLOCK_BYTES - largest : 0U;
             void *scratch = tlsf_memalign(allocator, 8U, largest);
@@ -247,6 +248,28 @@ bool telemetry_tlsf_admit(size_t additional, size_t largest)
                 allowed = true;
             } else {
                 allowed = slot_available && padding <= available - additional - reserve;
+                /* Fragmented ordinary blocks can still hold the small strings
+                 * in a discovery snapshot. Hold their full budget while
+                 * testing, then release it, rather than rejecting discovery
+                 * forever just because its largest buffer needs fallback. */
+                void *head = NULL;
+                size_t remaining = additional > largest ? additional - largest : 0U;
+                unsigned probes = 0U;
+                while (allowed && remaining != 0U && probes++ < 128U) {
+                    const size_t chunk = remaining > 128U ? 128U : remaining;
+                    void *block = tlsf_memalign(allocator, 8U,
+                        chunk < sizeof(void *) ? sizeof(void *) : chunk);
+                    if (!block) { allowed = false; break; }
+                    *(void **)block = head;
+                    head = block;
+                    remaining -= chunk;
+                }
+                if (remaining != 0U) allowed = false;
+                while (head) {
+                    void *next = *(void **)head;
+                    tlsf_free(allocator, head);
+                    head = next;
+                }
             }
         }
     }
