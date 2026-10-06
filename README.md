@@ -132,3 +132,21 @@ CAN receive admission lets a sender use the whole ring while capacity remains. O
 Gateway uses its private STM32 CRC peripheral for the existing IEEE CRC-32 checks after startup reference-vector and incremental-state checks succeed. Unsupported inputs and simulator builds retain the software table implementation. The CRC adapter preserves the interrupt mask and bounds each protected call to 4096 bytes; it does not allocate memory. `g_gateway_crc_hw_state` reports 1 for hardware active or 2 for software fallback.
 
 The shared CAN side retains up to 32 header templates, compared with 16 previously, so frequent DAQ traffic is less likely to evict quiet-board compact headers. This uses bounded heap metadata within the unchanged allocator pool; live qualification must check both traffic delivery and peak allocation.
+
+### Command and ACK admission
+
+The CAN callback uses SEDSnet's logical packet priority for every compact or
+fragmented frame. Commands and valve confirmations use priority 200; protocol
+ACKs, schema, and discovery carry their library priority. These use the low CAN
+arbitration band and cannot be evicted by ordinary telemetry in the RX ring. A
+priority frame can replace telemetry from its own sender when that sender has
+the largest backlog. The gateway, actuator, valve, and GroundStation configs
+need the matching update; this does not replace end-to-end qualification.
+
+For a passive route capture with TLSF, write `g_gateway_peer_probe_request`: 1
+for GS, 2 for AB, 3 for VB, or 4 for DAQ. The foreground task exports one peer
+to `g_gateway_peer_probe_json`; inspect `g_gateway_peer_probe_result` before
+reading it. The probe reserves scratch headroom before using a temporary 1 KiB
+buffer, returns an error under pressure, and frees the buffer after ten seconds
+or request 5. It is idle unless explicitly requested. Full topology exports
+are unsuitable for this board's live memory budget.

@@ -122,6 +122,15 @@ char g_gateway_hil_topology[4096];
 char g_gateway_hil_runtime[3072];
 #endif
 
+/* Requested once by a debugger: 1 GS, 2 AB, 3 VB, 4 DAQ, 5 release.
+ * One-peer export avoids cloning the full network topology. */
+volatile uint32_t g_gateway_peer_probe_request;
+volatile int32_t g_gateway_peer_probe_result;
+char *g_gateway_peer_probe_json;
+static uint32_t peer_probe_tick;
+extern void *telemetry_can_tx_allocate(size_t bytes);
+extern void telemetryFree(void *ptr);
+
 SedsResult tx_send(const uint8_t *bytes, size_t len, void *user);
 
 /* Exported simulator/HIL health signals. A linked-bay test requires both a
@@ -400,6 +409,40 @@ void telemetry_set_unix_time_ms(uint64_t unix_ms) {
 }
 
 void telemetry_hil_capture_requested_snapshot(void) {
+  const uint32_t request = g_gateway_peer_probe_request;
+  const uint32_t now = HAL_GetTick();
+  if (request == 5U || (request == 0U && g_gateway_peer_probe_json != NULL &&
+                       (uint32_t)(now - peer_probe_tick) >= 10000U)) {
+    telemetryFree(g_gateway_peer_probe_json);
+    g_gateway_peer_probe_json = NULL;
+    g_gateway_peer_probe_request = 0U;
+  } else if (request >= 1U && request <= 4U && g_router.r != NULL) {
+    static const char *const peers[] = {"GS", "AB", "VB", "DAQ"};
+    g_gateway_peer_probe_result = SEDS_IO;
+#ifdef TELEMETRY_USE_TLSF
+    /* The JSON export allocates scratch internally; guard that too. */
+    if (!telemetry_tlsf_admit(8192U, 2048U)) {
+      g_gateway_peer_probe_request = 0U;
+      return;
+    }
+#else
+    /* This diagnostic is qualified only with the TLSF memory probe. */
+    g_gateway_peer_probe_request = 0U;
+    return;
+#endif
+    if (g_gateway_peer_probe_json == NULL)
+      g_gateway_peer_probe_json = telemetry_can_tx_allocate(1024U);
+    if (g_gateway_peer_probe_json != NULL) {
+      g_gateway_peer_probe_json[0] = '\0';
+      telemetry_lock();
+      const char *peer = peers[request - 1U];
+      g_gateway_peer_probe_result = seds_router_export_client_stats(
+          g_router.r, peer, strlen(peer), g_gateway_peer_probe_json, 1024U);
+      telemetry_unlock();
+    }
+    peer_probe_tick = now;
+    g_gateway_peer_probe_request = 0U;
+  }
 #ifdef GATEWAY_HIL_DIAGNOSTICS
   if (g_gateway_hil_snapshot_request == 0U || g_router.r == NULL) {
     return;
