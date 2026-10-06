@@ -88,7 +88,7 @@ static int32_t g_can_side_id = -1;
  * dictionary per board. Four entries churn under DAQ + valve + actuator
  * traffic, costing allocations and dropping compact frames between refreshes.
  * Keep a bounded aggregate cache while allocator admission protects growth. */
-#define BOARD_SIDE_TRANSPORT_TEMPLATES 16U
+#define BOARD_SIDE_TRANSPORT_TEMPLATES 32U
 #ifdef TELEMETRY_BOARD_LINK_UART
 static int32_t g_board_link_side_id = -1;
 #endif

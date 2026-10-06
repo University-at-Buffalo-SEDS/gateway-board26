@@ -33,6 +33,28 @@ impl Hasher {
     }
 
     pub fn update(&mut self, bytes: &[u8]) {
+        if bytes.is_empty() {
+            return;
+        }
+        #[cfg(target_arch = "arm")]
+        {
+            unsafe extern "C" {
+                fn gateway_crc32_update(
+                    state: u32,
+                    bytes: *const u8,
+                    len: usize,
+                    result: *mut u32,
+                ) -> i32;
+            }
+            let mut state = self.state;
+            // The board adapter checks its peripheral before use and returns
+            // false on unsupported inputs/platforms, preserving this reference.
+            if unsafe { gateway_crc32_update(state, bytes.as_ptr(), bytes.len(), &mut state) } != 0
+            {
+                self.state = state;
+                return;
+            }
+        }
         for &byte in bytes {
             self.state = (self.state >> 8) ^ CRC_TABLE[((self.state as u8) ^ byte) as usize];
         }

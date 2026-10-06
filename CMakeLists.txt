@@ -85,6 +85,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/telemetry_uart.c
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/board_link_uart.c
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/ltc2990.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/gateway_crc32.c
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/data_acq.c
 )
 

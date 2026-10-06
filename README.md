@@ -126,3 +126,9 @@ matching factory bootloader. `--packet-store heap` disables the arena.
 The new arena API must be present in an offline fallback; an older source is
 rejected clearly. This candidate is for testing; linked ten-minute qualification
 and a throughput claim remain pending.
+
+CAN receive admission lets a sender use the whole ring while capacity remains. Only when the ring is full, an incoming quiet board can displace a queued frame from the board occupying the most slots; priority arbitration IDs and the consumer's tail slot are protected. FIFO order of retained frames is preserved. `g_can_rx_peer_dropped` counts displaced frames, while `g_can_rx_sender_frames` and `g_can_rx_sender_dropped` expose ingress and losses per board token. This is an overload fallback, not a lossless-delivery guarantee; legacy CAN IDs do not identify the logical priority of opaque compact/chunk frames.
+
+Gateway uses its private STM32 CRC peripheral for the existing IEEE CRC-32 checks after startup reference-vector and incremental-state checks succeed. Unsupported inputs and simulator builds retain the software table implementation. The CRC adapter preserves the interrupt mask and bounds each protected call to 4096 bytes; it does not allocate memory. `g_gateway_crc_hw_state` reports 1 for hardware active or 2 for software fallback.
+
+The shared CAN side retains up to 32 header templates, compared with 16 previously, so frequent DAQ traffic is less likely to evict quiet-board compact headers. This uses bounded heap metadata within the unchanged allocator pool; live qualification must check both traffic delivery and peak allocation.

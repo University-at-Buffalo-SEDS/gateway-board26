@@ -18,7 +18,8 @@ class CanAdmissionTests(unittest.TestCase):
 typedef struct { uint32_t std_id; uint8_t len, data[64]; } can_bus_rx_frame_t;
 static can_bus_rx_frame_t g_rx_ring[48];
 static uint16_t g_rx_head, g_rx_tail;
-static uint32_t g_rx_dropped_frames, g_can_rx_bulk_dropped;
+static uint32_t g_rx_dropped_frames, g_can_rx_bulk_dropped, g_can_rx_peer_dropped;
+static uint32_t g_can_rx_sender_frames[8], g_can_rx_sender_dropped[8];
 ''' + ring + r'''
 int main(void) {
  uint8_t bulk[16]={0,1,118}, status[16]={0,1,117}, fragment[64]={83,68,7,1,0,1,3,16,0};
@@ -46,6 +47,45 @@ int main(void) {
    assert(!rb_pop(&out));
  }
  assert(g_can_rx_bulk_dropped==1000 && g_rx_dropped_frames==2000);
+ // Previously unknown compact/fragmented DAQ traffic filled all 47 slots.
+ // Full-ring shedding displaces the largest sender for a quiet board.
+ uint8_t compact[16]={83,68,84,2,1};
+ fragment[5]=3; fragment[7]=128; memcpy(fragment+9,status,16);
+ unsigned before_ab=g_can_rx_sender_frames[5], before_ab_drops=g_can_rx_sender_dropped[5];
+ for(unsigned pass=0;pass<1000;pass++) {
+   for(unsigned i=0;i<47;i++) rb_push(0x107,compact,16);
+   for(unsigned i=0;i<47;i++) rb_push(0x106,compact,16);
+   for(unsigned i=0;i<3;i++) rb_push(0x105,fragment,64);
+   can_bus_rx_frame_t out;
+   unsigned daq=0, valve=0, actuator=0;
+   for(unsigned i=0;i<47;i++) {
+     assert(rb_pop(&out));
+     if(out.std_id==0x107) daq++;
+     else if(out.std_id==0x106) valve++;
+     else { assert(out.std_id==0x105); actuator++; }
+   }
+   assert(daq==22 && valve==22 && actuator==3);
+   assert(!rb_pop(&out));
+ }
+ assert(g_can_rx_peer_dropped==27000);
+ assert(g_can_rx_sender_frames[5]-before_ab==3000);
+ assert(g_can_rx_sender_dropped[5]==before_ab_drops);
+ assert(g_can_rx_sender_dropped[7]==25000 && g_can_rx_sender_dropped[6]==25000);
+ // A single sender can use the entire ring: there is no early fixed quota.
+ for(unsigned i=0;i<47;i++) rb_push(0x107,compact,16);
+ assert(g_rx_head!=g_rx_tail);
+ can_bus_rx_frame_t saved=g_rx_ring[g_rx_tail];
+ // A receive interrupt may occur while foreground is copying this tail slot.
+ rb_push(0x105,fragment,64);
+ assert(!memcmp(&saved,&g_rx_ring[g_rx_tail],sizeof(saved)));
+ can_bus_rx_frame_t drain;
+ for(unsigned i=0;i<46;i++) {assert(rb_pop(&drain)); assert(drain.std_id==0x107);}
+ assert(rb_pop(&drain) && drain.std_id==0x105 && !rb_pop(&drain));
+ // Capacity is recovered immediately after consumption, including wraparound.
+ for(unsigned i=0;i<16;i++) rb_push(0x107,compact,16);
+ can_bus_rx_frame_t out;
+ for(unsigned i=0;i<16;i++) assert(rb_pop(&out));
+ rb_push(0x107,compact,16); assert(rb_pop(&out));
 }
 '''
         with tempfile.TemporaryDirectory() as tmp:

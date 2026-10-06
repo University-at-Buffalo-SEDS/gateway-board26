@@ -189,6 +189,10 @@ static volatile uint16_t g_rx_tail = 0;
 static volatile uint32_t g_rx_dropped_frames = 0;
 volatile uint32_t g_fdcan_rx_count = 0;
 volatile uint32_t g_can_rx_bulk_dropped = 0;
+volatile uint32_t g_can_rx_peer_dropped = 0;
+/* Wire admission counts by the board token in 0x00N/0x10N CAN IDs. */
+volatile uint32_t g_can_rx_sender_frames[8];
+volatile uint32_t g_can_rx_sender_dropped[8];
 volatile uint32_t g_fdcan_rx_hw_overflow_count = 0;
 volatile uint32_t g_fdcan_init_error_count = 0;
 volatile uint32_t g_fdcan_tx_ok_count = 0;
@@ -255,6 +259,49 @@ static inline int __attribute__((unused)) rb_is_empty(void) {
 
 static inline int rb_is_full(void) { return rb_next(g_rx_head) == g_rx_tail; }
 
+/* Only shed a dominant board when all usable slots are occupied. The ISR
+ * never moves the tail slot: foreground may have been preempted while copying
+ * it. Removing a later slot and appending the new frame preserves the order
+ * of every retained frame and leaves head/tail unchanged. */
+static inline int rb_replace_dominant(uint32_t std_id, const uint8_t *data,
+                                      uint8_t len) {
+  const unsigned incoming = std_id & 0xffU;
+  if (incoming == 0U || incoming >= 8U) return 0;
+  const uint16_t tail = g_rx_tail, head = g_rx_head;
+  uint8_t counts[8] = {0};
+  for (uint16_t i = tail; i != head; i = rb_next(i)) {
+    const unsigned peer = g_rx_ring[i].std_id & 0xffU;
+    if (peer > 0U && peer < 8U) ++counts[peer];
+  }
+  uint16_t victim = CAN_BUS_RX_RING_DEPTH;
+  unsigned largest = counts[incoming];
+  for (uint16_t i = rb_next(tail); i != head; i = rb_next(i)) {
+    const unsigned peer = g_rx_ring[i].std_id & 0xffU;
+    /* Low arbitration IDs are reserved for priority/liveness traffic. */
+    if (g_rx_ring[i].std_id >= 0x100U && peer > 0U && peer < 8U &&
+        peer != incoming && counts[peer] > largest) {
+      largest = counts[peer];
+      victim = i;
+    }
+  }
+  if (victim == CAN_BUS_RX_RING_DEPTH) return 0;
+  const unsigned evicted_peer = g_rx_ring[victim].std_id & 0xffU;
+  uint16_t last = victim;
+  while (rb_next(last) != head) {
+    const uint16_t next = rb_next(last);
+    g_rx_ring[last] = g_rx_ring[next];
+    last = next;
+  }
+  g_rx_ring[last].std_id = std_id;
+  g_rx_ring[last].len = len;
+  memcpy(g_rx_ring[last].data, data, len);
+  __DMB();
+  ++g_can_rx_sender_dropped[evicted_peer];
+  ++g_can_rx_peer_dropped;
+  ++g_rx_dropped_frames;
+  return 1;
+}
+
 // Push frame from ISR. Drop incoming frames on overflow.
 //
 // Memory ordering:
@@ -264,17 +311,23 @@ static inline void rb_push(uint32_t std_id, const uint8_t *data, uint8_t len) {
   if (len > 64)
     len = 64;
 
+  const unsigned sender = std_id & 0xffU;
+  const unsigned sender_known = sender > 0U && sender < 8U;
+  if (sender_known) ++g_can_rx_sender_frames[sender];
   const uint16_t head = g_rx_head, tail = g_rx_tail;
   const unsigned occupied = head >= tail ? head - tail :
       CAN_BUS_RX_RING_DEPTH - tail + head;
   if (occupied >= CAN_BUS_RX_RING_DEPTH - 1U - 8U &&
       can_rx_is_bulk_loadcell(data, len)) {
+    if (sender_known) ++g_can_rx_sender_dropped[sender];
     g_can_rx_bulk_dropped++;
     g_rx_dropped_frames++;
     return;
   }
 
   if (rb_is_full()) {
+    if (rb_replace_dominant(std_id, data, len)) return;
+    if (sender_known) ++g_can_rx_sender_dropped[sender];
     g_rx_dropped_frames++;
     return;
   }
