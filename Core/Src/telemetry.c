@@ -83,7 +83,11 @@ static uint8_t g_board_link_rx_subscribed = 0U;
 #endif
 static int32_t g_can_side_id = -1;
 #define BOARD_CAN_MAX_FRAME_BYTES 128U
-#define BOARD_SIDE_TRANSPORT_TEMPLATES 4U
+/* This is the receive cache for the whole shared CAN segment, not one
+ * dictionary per board. Four entries churn under DAQ + valve + actuator
+ * traffic, costing allocations and dropping compact frames between refreshes.
+ * Keep a bounded aggregate cache while allocator admission protects growth. */
+#define BOARD_SIDE_TRANSPORT_TEMPLATES 16U
 #ifdef TELEMETRY_BOARD_LINK_UART
 static int32_t g_board_link_side_id = -1;
 #endif
