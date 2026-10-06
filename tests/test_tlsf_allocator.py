@@ -73,10 +73,12 @@ int main(int argc,char**argv){
   }
   assert(count>20);
   for(unsigned i=0;i<count;i++)telemetry_tlsf_free(temporary[i]);
-  void *held0=telemetry_tlsf_malloc(2048),*held1=telemetry_tlsf_malloc(2048);
-  assert(held0&&held1);void *tails[128];unsigned tail_count=0;
+  void *tails[128];unsigned tail_count=0;
   while(tail_count<128&&(tails[tail_count]=telemetry_tlsf_malloc(2048)))tail_count++;
-  telemetry_tlsf_free(held0);telemetry_tlsf_free(held1);
+  assert(g_gateway_large_slot_live==2);
+  for(unsigned i=0;i<tail_count;i++){
+   if(large_slot_index(tails[i])>=0){telemetry_tlsf_free(tails[i]);tails[i]=NULL;}
+  }
   // The ordinary fragmented heap cannot satisfy the observed 2 KiB decode.
   void *ordinary=tlsf_memalign(allocator,8,2048);assert(!ordinary);
   assert(telemetry_tlsf_admit(8192,2048));

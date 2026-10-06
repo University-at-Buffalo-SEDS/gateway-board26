@@ -112,8 +112,9 @@ current recovery configuration; the smaller arena remains experimental.
 It is separate from TLSF, which replaces only board-owned telemetry allocation
 hooks; ThreadX scheduling continues unchanged. The gateway reserves two 4 KiB
 allocation slots from the existing TLSF pool for requests of 2,048–4,096 bytes.
-Small packets cannot fragment these blocks; larger requests and slot exhaustion
-fall back to the ordinary heap, subject to the same admission checks. This
+Small packets cannot fragment these blocks. Allocation uses the ordinary heap
+first, preserving the slots for decode-sized requests that fragmentation would
+otherwise reject. Slot exhaustion remains subject to normal admission checks. This
 protects discovery decode headroom without adding static RAM or moving live
 pointers. `g_gateway_large_slot_live` / `g_gateway_large_slot_peak` and
 `g_gateway_admission_last_additional` / `g_gateway_admission_last_largest`

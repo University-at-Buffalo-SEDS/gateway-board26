@@ -141,8 +141,9 @@ void *telemetry_tlsf_malloc(size_t size)
     __disable_irq();
     void *ptr = NULL;
     if (initialize() && size <= tlsf_block_size_max() - 64U) {
-        ptr = large_slot_allocate(size);
-        if (!ptr) ptr = tlsf_memalign(allocator, 8U, size ? size : 1U);
+        /* Startup topology/replay buffers should not occupy the reserve. */
+        ptr = tlsf_memalign(allocator, 8U, size ? size : 1U);
+        if (!ptr) ptr = large_slot_allocate(size);
     }
     if (ptr) {
         ++live_allocations;
@@ -208,11 +209,12 @@ bool telemetry_tlsf_admit(size_t additional, size_t largest)
             const bool slot_available = largest >= LARGE_SLOT_MIN && largest <= LARGE_SLOT_BYTES &&
                 g_gateway_large_slot_live < LARGE_SLOT_COUNT;
             const size_t padding = slot_available ? LARGE_SLOT_BYTES - largest : 0U;
-            allowed = padding <= available - additional - reserve;
-            if (allowed && !slot_available) {
-                void *scratch = tlsf_memalign(allocator, 8U, largest);
-                allowed = scratch != NULL;
-                if (scratch) tlsf_free(allocator, scratch);
+            void *scratch = tlsf_memalign(allocator, 8U, largest);
+            if (scratch) {
+                tlsf_free(allocator, scratch);
+                allowed = true;
+            } else {
+                allowed = slot_available && padding <= available - additional - reserve;
             }
         }
     }
