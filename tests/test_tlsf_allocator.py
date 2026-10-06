@@ -89,7 +89,10 @@ int main(int argc,char**argv){
   memset(decode,0x6b,2048);memset(nested,0x7c,4096);
   void *medium=telemetry_tlsf_malloc(676);assert(medium);memset(medium,0x4d,676);
   assert(!telemetry_tlsf_admit(8192,2048));
-  telemetry_tlsf_free(medium);
+  void *guard_block=telemetry_tlsf_malloc(1024);assert(guard_block);
+  // A tiny frame estimate must not admit work whose owned object needs 676 B.
+  assert(!telemetry_tlsf_admit(384,160));
+  telemetry_tlsf_free(guard_block);telemetry_tlsf_free(medium);
   telemetry_tlsf_free(decode);assert(telemetry_tlsf_admit(8192,2048));
   decode=telemetry_tlsf_malloc(2048);assert(decode);
   for(unsigned j=0;j<4096;j++)assert(((unsigned char*)nested)[j]==0x7c);

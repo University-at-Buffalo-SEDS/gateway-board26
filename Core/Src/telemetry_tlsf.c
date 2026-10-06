@@ -219,6 +219,11 @@ bool telemetry_tlsf_admit(size_t additional, size_t largest)
     __disable_irq();
     bool allowed = initialize() != 0;
     const size_t reserve = additional <= 512U ? 512U : 4096U;
+    /* Even a small wire ACK can allocate a larger owned queue/decoder object:
+     * hardware captured a 676-byte request after a 160-byte scratch estimate.
+     * Preserve the smaller ACK reserve, but admit its real working block. */
+    if (additional < 1024U) additional = 1024U;
+    if (largest != 0U && largest < 1024U) largest = 1024U;
     const size_t occupied = (size_t)g_telemetry_tlsf_live_bytes +
         ((size_t)live_allocations + region_count) * 2U * sizeof(void *);
     const size_t available = g_telemetry_tlsf_region_bytes > occupied ?
