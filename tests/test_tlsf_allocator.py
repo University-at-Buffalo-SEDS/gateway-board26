@@ -55,6 +55,11 @@ extern volatile uint32_t g_telemetry_tlsf_snapshot_count;
 extern volatile uint32_t g_telemetry_tlsf_live_bytes,g_telemetry_tlsf_peak_bytes;
 extern volatile uint32_t g_telemetry_tlsf_free_bytes,g_telemetry_tlsf_largest_free;
 static uint64_t arenas[3][4096];
+static void *ordinary_only(size_t n){
+ void *p=tlsf_memalign(allocator,8,n);
+ if(p){live_allocations++;g_telemetry_tlsf_live_bytes+=tlsf_block_size(p);}
+ return p;
+}
 int main(int argc,char**argv){
  (void)argv;TX_BYTE_POOL pools[3];
  for(unsigned i=0;i<3;i++){pools[i]=(TX_BYTE_POOL){(unsigned char*)arenas[i],0,sizeof(arenas[i])};telemetry_tlsf_register_pool(&pools[i]);}
@@ -65,35 +70,38 @@ int main(int argc,char**argv){
   // Reproduce plentiful free bytes with no decode-sized contiguous TLSF block.
   void *keepers[256]={0},*temporary[256]={0};unsigned count=0;
   for(;count<256;count++){
-   keepers[count]=telemetry_tlsf_malloc(768);
+   keepers[count]=ordinary_only(768);
    if(!keepers[count])break;
    memset(keepers[count],0x5a,768);
-   temporary[count]=telemetry_tlsf_malloc(1024);
+   temporary[count]=ordinary_only(1024);
    if(!temporary[count]){count++;break;}
   }
   assert(count>20);
   for(unsigned i=0;i<count;i++)telemetry_tlsf_free(temporary[i]);
   void *tails[128];unsigned tail_count=0;
-  while(tail_count<128&&(tails[tail_count]=telemetry_tlsf_malloc(2048)))tail_count++;
-  assert(g_gateway_large_slot_live==2);
-  for(unsigned i=0;i<tail_count;i++){
-   if(large_slot_index(tails[i])>=0){telemetry_tlsf_free(tails[i]);tails[i]=NULL;}
-  }
-  // The ordinary fragmented heap cannot satisfy the observed 2 KiB decode.
-  void *ordinary=tlsf_memalign(allocator,8,2048);assert(!ordinary);
+  while(tail_count<128&&(tails[tail_count]=ordinary_only(676)))tail_count++;
+  assert(g_gateway_large_slot_live==0);
+  // The ordinary fragmented heap cannot satisfy even the captured 676-byte request.
+  void *ordinary=tlsf_memalign(allocator,8,676);assert(!ordinary);
   assert(telemetry_tlsf_admit(8192,2048));
   void *decode=telemetry_tlsf_malloc(2048),*nested=telemetry_tlsf_malloc(4096);
   assert(decode&&nested&&decode!=nested&&g_gateway_large_slot_live==2);
   memset(decode,0x6b,2048);memset(nested,0x7c,4096);
+  void *medium=telemetry_tlsf_malloc(676);assert(medium);memset(medium,0x4d,676);
   assert(!telemetry_tlsf_admit(8192,2048));
+  telemetry_tlsf_free(medium);
   telemetry_tlsf_free(decode);assert(telemetry_tlsf_admit(8192,2048));
   decode=telemetry_tlsf_malloc(2048);assert(decode);
+  for(unsigned j=0;j<4096;j++)assert(((unsigned char*)nested)[j]==0x7c);
+  telemetry_tlsf_free(decode);telemetry_tlsf_free(nested);
+  void *whole=telemetry_tlsf_malloc(8192);
+  assert(whole&&large_slot_index(whole)==0&&reserve_lengths[0]==32);
+  memset(whole,0x3e,8192);telemetry_tlsf_free(whole);
+  assert(!reserve_used&&!reserve_live_bytes);
   for(unsigned i=0;i<count;i++){
    for(unsigned j=0;j<768;j++)assert(((unsigned char*)keepers[i])[j]==0x5a);
    telemetry_tlsf_free(keepers[i]);
   }
-  for(unsigned j=0;j<4096;j++)assert(((unsigned char*)nested)[j]==0x7c);
-  telemetry_tlsf_free(decode);telemetry_tlsf_free(nested);
   for(unsigned i=0;i<tail_count;i++)telemetry_tlsf_free(tails[i]);
   assert(!g_gateway_large_slot_live&&!g_telemetry_tlsf_live_bytes);
   assert(telemetry_tlsf_admit(8192,8192));return 0;

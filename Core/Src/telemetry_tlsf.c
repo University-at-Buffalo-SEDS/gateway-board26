@@ -17,34 +17,47 @@ static uint32_t live_allocations;
  * slots are carved from the existing pool, not additional static RAM. */
 #define LARGE_SLOT_BYTES 4096U
 #define LARGE_SLOT_COUNT 2U
-#define LARGE_SLOT_MIN 2048U
+#define RESERVE_BLOCK_BYTES 256U
+#define RESERVE_BLOCK_COUNT 32U
 static uint8_t *large_slots;
-static unsigned large_slot_mask;
+static uint32_t reserve_used;
+static uint8_t reserve_lengths[RESERVE_BLOCK_COUNT];
+static uint32_t reserve_live_bytes;
 volatile uint32_t g_gateway_large_slot_live;
 volatile uint32_t g_gateway_large_slot_peak;
 volatile uint32_t g_gateway_admission_last_additional;
 volatile uint32_t g_gateway_admission_last_largest;
 
+/* A fixed bitmap avoids heap headers and bounds each search to 32 blocks.
+ * Only the allocation start records its length; pointers never move. */
+static int reserve_find(size_t size)
+{
+    if (!large_slots || size == 0U || size > RESERVE_BLOCK_BYTES * RESERVE_BLOCK_COUNT) return -1;
+    const unsigned blocks = (size + RESERVE_BLOCK_BYTES - 1U) / RESERVE_BLOCK_BYTES;
+    const uint32_t bits = UINT32_MAX >> (RESERVE_BLOCK_COUNT - blocks);
+    for (unsigned i = 0; i + blocks <= RESERVE_BLOCK_COUNT; ++i)
+        if ((reserve_used & (bits << i)) == 0U) return (int)i;
+    return -1;
+}
 static void *large_slot_allocate(size_t size)
 {
-    if (!large_slots || size < LARGE_SLOT_MIN || size > LARGE_SLOT_BYTES) return NULL;
-    for (unsigned i = 0; i < LARGE_SLOT_COUNT; ++i) {
-        if ((large_slot_mask & (1U << i)) == 0U) {
-            large_slot_mask |= 1U << i;
-            ++g_gateway_large_slot_live;
-            if (g_gateway_large_slot_live > g_gateway_large_slot_peak)
-                g_gateway_large_slot_peak = g_gateway_large_slot_live;
-            return large_slots + i * LARGE_SLOT_BYTES;
-        }
-    }
-    return NULL;
+    const int index = reserve_find(size);
+    if (index < 0) return NULL;
+    const unsigned blocks = (size + RESERVE_BLOCK_BYTES - 1U) / RESERVE_BLOCK_BYTES;
+    reserve_used |= (UINT32_MAX >> (RESERVE_BLOCK_COUNT - blocks)) << (unsigned)index;
+    reserve_lengths[index] = blocks;
+    reserve_live_bytes += blocks * RESERVE_BLOCK_BYTES;
+    ++g_gateway_large_slot_live;
+    if (g_gateway_large_slot_live > g_gateway_large_slot_peak)
+        g_gateway_large_slot_peak = g_gateway_large_slot_live;
+    return large_slots + (unsigned)index * RESERVE_BLOCK_BYTES;
 }
 static int large_slot_index(void *ptr)
 {
     const uintptr_t address = (uintptr_t)ptr, start = (uintptr_t)large_slots;
     if (!large_slots || address < start || address >= start + LARGE_SLOT_COUNT * LARGE_SLOT_BYTES)
         return -1;
-    return (address - start) / LARGE_SLOT_BYTES;
+    return (address - start) / RESERVE_BLOCK_BYTES;
 }
 volatile uint32_t g_gateway_memory_admission_drops;
 volatile uint32_t g_telemetry_tlsf_peak_bytes;
@@ -85,12 +98,18 @@ static void snapshot(void)
     g_telemetry_tlsf_free_blocks = 0;
     for (unsigned i = 0; i < region_count; ++i)
         tlsf_walk_pool(regions[i], snapshot_block, NULL);
-    const uint32_t free_slots = LARGE_SLOT_COUNT - g_gateway_large_slot_live;
-    if (large_slots && free_slots) {
-        g_telemetry_tlsf_free_bytes += free_slots * LARGE_SLOT_BYTES;
-        g_telemetry_tlsf_free_blocks += free_slots;
-        if (g_telemetry_tlsf_largest_free < LARGE_SLOT_BYTES)
-            g_telemetry_tlsf_largest_free = LARGE_SLOT_BYTES;
+    if (large_slots) {
+        g_telemetry_tlsf_free_bytes += LARGE_SLOT_COUNT * LARGE_SLOT_BYTES - reserve_live_bytes;
+        unsigned run = 0;
+        for (unsigned i = 0; i < RESERVE_BLOCK_COUNT; ++i) {
+            if (reserve_used & (1UL << i)) run = 0;
+            else {
+                if (run == 0U) ++g_telemetry_tlsf_free_blocks;
+                ++run;
+                const uint32_t bytes = run * RESERVE_BLOCK_BYTES;
+                if (bytes > g_telemetry_tlsf_largest_free) g_telemetry_tlsf_largest_free = bytes;
+            }
+        }
     }
 }
 static int initialize(void)
@@ -147,7 +166,9 @@ void *telemetry_tlsf_malloc(size_t size)
     }
     if (ptr) {
         ++live_allocations;
-        g_telemetry_tlsf_live_bytes += large_slot_index(ptr) >= 0 ? LARGE_SLOT_BYTES : tlsf_block_size(ptr);
+        const int index = large_slot_index(ptr);
+        g_telemetry_tlsf_live_bytes += index >= 0 ?
+            reserve_lengths[index] * RESERVE_BLOCK_BYTES : tlsf_block_size(ptr);
         if (g_telemetry_tlsf_live_bytes > g_telemetry_tlsf_peak_bytes)
             g_telemetry_tlsf_peak_bytes = g_telemetry_tlsf_live_bytes;
     } else {
@@ -166,9 +187,12 @@ void telemetry_tlsf_free(void *ptr)
     --live_allocations;
     const int slot = large_slot_index(ptr);
     if (slot >= 0) {
-        large_slot_mask &= ~(1U << (unsigned)slot);
+        const unsigned blocks = reserve_lengths[slot];
+        reserve_used &= ~((UINT32_MAX >> (RESERVE_BLOCK_COUNT - blocks)) << (unsigned)slot);
+        reserve_lengths[slot] = 0U;
         --g_gateway_large_slot_live;
-        g_telemetry_tlsf_live_bytes -= LARGE_SLOT_BYTES;
+        reserve_live_bytes -= blocks * RESERVE_BLOCK_BYTES;
+        g_telemetry_tlsf_live_bytes -= blocks * RESERVE_BLOCK_BYTES;
     } else {
         g_telemetry_tlsf_live_bytes -= tlsf_block_size(ptr);
         tlsf_free(allocator, ptr);
@@ -206,9 +230,9 @@ bool telemetry_tlsf_admit(size_t additional, size_t largest)
         } else {
             /* The two slot allocations may round up beyond the caller's
              * estimate. Preserve that extra headroom before admitting work. */
-            const bool slot_available = largest >= LARGE_SLOT_MIN && largest <= LARGE_SLOT_BYTES &&
-                g_gateway_large_slot_live < LARGE_SLOT_COUNT;
-            const size_t padding = slot_available ? LARGE_SLOT_BYTES - largest : 0U;
+            const bool slot_available = reserve_find(largest) >= 0;
+            const size_t padding = slot_available ?
+                ((largest + RESERVE_BLOCK_BYTES - 1U) / RESERVE_BLOCK_BYTES) * RESERVE_BLOCK_BYTES - largest : 0U;
             void *scratch = tlsf_memalign(allocator, 8U, largest);
             if (scratch) {
                 tlsf_free(allocator, scratch);
