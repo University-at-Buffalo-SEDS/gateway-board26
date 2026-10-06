@@ -152,7 +152,7 @@ class QualificationContractTests(unittest.TestCase):
         self.assertNotIn("seds_pkt_pack", bridge)
         self.assertIn("seds_router_new(node_now_since_ms", telemetry)
         self.assertNotIn("Seds_RM_", telemetry)
-        self.assertIn('r, "can", 3U, tx_send, NULL, false', telemetry)
+        self.assertIn('r, "can", 3U, tx_send_with_priority, NULL, false', telemetry)
         self.assertIn('seds_router_add_side_packed_profile(\n      r, "uart"', telemetry)
         self.assertIn('r, "uart", 4U, telemetry_uart_tx_send, NULL, false,', telemetry)
         self.assertIn("GATEWAY_UART_MAX_FRAME_BYTES", telemetry)

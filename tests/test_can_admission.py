@@ -38,12 +38,12 @@ int main(void) {
  bulk[0]=64; assert(!can_rx_is_bulk_loadcell(bulk,16)); bulk[0]=0;
  // Repeated saturation and wraparound: 39 bulk slots, eight protected slots.
  for(unsigned pass=0;pass<1000;pass++) {
-   for(unsigned i=0;i<39;i++) rb_push(i,bulk,16);
+   for(unsigned i=0;i<39;i++) rb_push(0x180+i,bulk,16);
    rb_push(999,bulk,16);
    for(unsigned i=39;i<47;i++) rb_push(i,status,16);
    rb_push(999,status,16);
    can_bus_rx_frame_t out;
-   for(unsigned i=0;i<47;i++) {assert(rb_pop(&out)); assert(out.std_id==i);}
+   for(unsigned i=0;i<47;i++) {assert(rb_pop(&out)); assert(out.std_id==(i<39 ? 0x180+i : i));}
    assert(!rb_pop(&out));
  }
  assert(g_can_rx_bulk_dropped==1000 && g_rx_dropped_frames==2000);
@@ -81,6 +81,23 @@ int main(void) {
  can_bus_rx_frame_t drain;
  for(unsigned i=0;i<46;i++) {assert(rb_pop(&drain)); assert(drain.std_id==0x107);}
  assert(rb_pop(&drain) && drain.std_id==0x105 && !rb_pop(&drain));
+ // The dominant actuator's opaque ACK/status/schema fragments must survive.
+ for(unsigned i=0;i<24;i++) rb_push(0x105,compact,16);
+ for(unsigned i=0;i<23;i++) rb_push(0x107,compact,16);
+ unsigned critical_drops=g_can_rx_sender_dropped[5];
+ for(unsigned i=0;i<3;i++) rb_push(0x005,fragment,64);
+ assert(g_can_rx_sender_dropped[5]==critical_drops+3);
+ // More bulk traffic cannot evict any of those three protected frames.
+ for(unsigned i=0;i<47;i++) rb_push(0x107,compact,16);
+ unsigned protected=0;
+ while(rb_pop(&drain)) if(drain.std_id==0x005) protected++;
+ assert(protected==3);
+ // Priority is trusted even if a payload happens to look like bulk data.
+ for(unsigned i=0;i<39;i++) rb_push(0x107,compact,16);
+ rb_push(0x005,bulk,16);
+ protected=0;
+ while(rb_pop(&drain)) if(drain.std_id==0x005) protected++;
+ assert(protected==1);
  // Capacity is recovered immediately after consumption, including wraparound.
  for(unsigned i=0;i<16;i++) rb_push(0x107,compact,16);
  can_bus_rx_frame_t out;

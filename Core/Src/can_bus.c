@@ -274,12 +274,14 @@ static inline int rb_replace_dominant(uint32_t std_id, const uint8_t *data,
     if (peer > 0U && peer < 8U) ++counts[peer];
   }
   uint16_t victim = CAN_BUS_RX_RING_DEPTH;
-  unsigned largest = counts[incoming];
+  /* Control must displace telemetry even from its own dominant sender. */
+  const unsigned priority = std_id < 0x100U;
+  unsigned largest = priority ? 0U : counts[incoming];
   for (uint16_t i = rb_next(tail); i != head; i = rb_next(i)) {
     const unsigned peer = g_rx_ring[i].std_id & 0xffU;
     /* Low arbitration IDs are reserved for priority/liveness traffic. */
     if (g_rx_ring[i].std_id >= 0x100U && peer > 0U && peer < 8U &&
-        peer != incoming && counts[peer] > largest) {
+        (priority || peer != incoming) && counts[peer] > largest) {
       largest = counts[peer];
       victim = i;
     }
@@ -317,7 +319,8 @@ static inline void rb_push(uint32_t std_id, const uint8_t *data, uint8_t len) {
   const uint16_t head = g_rx_head, tail = g_rx_tail;
   const unsigned occupied = head >= tail ? head - tail :
       CAN_BUS_RX_RING_DEPTH - tail + head;
-  if (occupied >= CAN_BUS_RX_RING_DEPTH - 1U - 8U &&
+  if (std_id >= 0x100U &&
+      occupied >= CAN_BUS_RX_RING_DEPTH - 1U - 8U &&
       can_rx_is_bulk_loadcell(data, len)) {
     if (sender_known) ++g_can_rx_sender_dropped[sender];
     g_can_rx_bulk_dropped++;
