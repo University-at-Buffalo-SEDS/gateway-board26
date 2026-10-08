@@ -87,6 +87,19 @@ int main(int argc,char**argv){
   const uint32_t before_bitmap=reserve_used, before_live=g_telemetry_tlsf_live_bytes;
   assert(telemetry_tlsf_admit(8192,2048));
   assert(reserve_used==before_bitmap&&g_telemetry_tlsf_live_bytes==before_live);
+  // Hardware: a retained 2816-byte fallback block must not strand 2 KiB decode.
+  void *retained=telemetry_tlsf_malloc(2816);assert(retained);
+  assert(reserve_live_bytes==2816);
+  const uint32_t pinned_bitmap=reserve_used,pinned_live=g_telemetry_tlsf_live_bytes;
+  // Consume ordinary fragments until the operation needs both pools.
+  void *small[256];unsigned small_count=0;
+  while(small_count<256 && (small[small_count]=ordinary_only(128)))small_count++;
+  assert(!telemetry_tlsf_admit(8192,2048)); // No room for the full safety reserve.
+  for(unsigned i=0;i<small_count;i++)telemetry_tlsf_free(small[i]);
+  assert(telemetry_tlsf_admit(8192,2048));
+  assert(reserve_used==pinned_bitmap&&g_telemetry_tlsf_live_bytes==pinned_live);
+  void *scratch=telemetry_tlsf_malloc(2048);assert(scratch);
+  telemetry_tlsf_free(scratch);telemetry_tlsf_free(retained);
   assert(telemetry_tlsf_admit(4096,2048));
   void *decode=telemetry_tlsf_malloc(2048),*nested=telemetry_tlsf_malloc(4096);
   assert(decode&&nested&&decode!=nested&&g_gateway_large_slot_live==2);
@@ -97,7 +110,7 @@ int main(int argc,char**argv){
   // A tiny frame estimate must not admit work whose owned object needs 676 B.
   assert(!telemetry_tlsf_admit(384,160));
   telemetry_tlsf_free(guard_block);telemetry_tlsf_free(medium);
-  telemetry_tlsf_free(decode);assert(!telemetry_tlsf_admit(8192,2048));
+  telemetry_tlsf_free(decode);assert(telemetry_tlsf_admit(8192,2048));
   decode=telemetry_tlsf_malloc(2048);assert(decode);
   for(unsigned j=0;j<4096;j++)assert(((unsigned char*)nested)[j]==0x7c);
   telemetry_tlsf_free(decode);telemetry_tlsf_free(nested);

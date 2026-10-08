@@ -8,10 +8,13 @@
 #include "main.h"
 #include <string.h>
 
-/* The live 1 Mbps bridge peaked at two queued frames. Four slots retain
- * burst headroom while returning two KiB to the allocator for discovery.
- * Backpressure leaves retained router work available for a later dispatch. */
-#define TELEMETRY_UART_QUEUE_DEPTH 4U
+/* Retain sixteen small telemetry/control frames and two full schema frames
+ * in the same payload RAM as the former four full-size slots. FIFO descriptors
+ * preserve ordering; DMA ownership ends only on completion or successful abort. */
+#define TELEMETRY_UART_SMALL_DEPTH 16U
+#define TELEMETRY_UART_LARGE_DEPTH 2U
+#define TELEMETRY_UART_SMALL_FRAME_SIZE 128U
+#define TELEMETRY_UART_QUEUE_DEPTH (TELEMETRY_UART_SMALL_DEPTH + TELEMETRY_UART_LARGE_DEPTH)
 #define TELEMETRY_UART_REQ_DATA_MAGIC 0xA5U
 #define TELEMETRY_UART_REQ_COMMAND_MAGIC 0xA6U
 #define TELEMETRY_UART_RESP_DATA_MAGIC 0x5AU
@@ -50,8 +53,11 @@ typedef struct {
   size_t nested_expected;
   size_t nested_discard_remaining;
 
-  uint8_t tx_payloads[TELEMETRY_UART_QUEUE_DEPTH][TELEMETRY_UART_FRAME_SIZE];
-  size_t tx_lengths[TELEMETRY_UART_QUEUE_DEPTH];
+  uint8_t tx_small[TELEMETRY_UART_SMALL_DEPTH][TELEMETRY_UART_SMALL_FRAME_SIZE];
+  uint8_t tx_large[TELEMETRY_UART_LARGE_DEPTH][TELEMETRY_UART_FRAME_SIZE];
+  uint16_t tx_lengths[TELEMETRY_UART_QUEUE_DEPTH];
+  uint8_t tx_buffers[TELEMETRY_UART_QUEUE_DEPTH];
+  uint32_t tx_buffer_used;
   uint8_t tx_head;
   uint8_t tx_tail;
   volatile uint8_t tx_count;
@@ -511,6 +517,14 @@ static void telemetry_uart_rx_push_byte(uint8_t byte) {
 
 /* Called with IRQs masked. DMA owns the head slot until UART TC, not
  * merely DMA transfer-complete. No router APIs or allocation in this path. */
+static uint8_t *telemetry_uart_tx_buffer(unsigned slot) {
+  const unsigned buffer = g_telemetry_uart.tx_buffers[slot];
+  return buffer < TELEMETRY_UART_SMALL_DEPTH ? g_telemetry_uart.tx_small[buffer] :
+      g_telemetry_uart.tx_large[buffer - TELEMETRY_UART_SMALL_DEPTH];
+}
+static void telemetry_uart_tx_release(unsigned slot) {
+  g_telemetry_uart.tx_buffer_used &= ~(1UL << g_telemetry_uart.tx_buffers[slot]);
+}
 static void telemetry_uart_tx_kick_locked(void) {
   if (g_telemetry_uart.tx_active || g_telemetry_uart.tx_error ||
       !g_telemetry_uart.tx_count || !g_telemetry_uart.huart) return;
@@ -518,7 +532,7 @@ static void telemetry_uart_tx_kick_locked(void) {
   g_telemetry_uart.tx_started_ms = HAL_GetTick();
   g_telemetry_uart.tx_active = 1U;
   const HAL_StatusTypeDef status = HAL_UART_Transmit_DMA(
-      g_telemetry_uart.huart, g_telemetry_uart.tx_payloads[slot],
+      g_telemetry_uart.huart, telemetry_uart_tx_buffer(slot),
       (uint16_t)g_telemetry_uart.tx_lengths[slot]);
   if (status != HAL_OK) {
     g_telemetry_uart.tx_active = 0U;
@@ -530,14 +544,21 @@ static uint8_t telemetry_uart_enqueue_frame(uint8_t magic,
                                             const uint8_t *payload, size_t len) {
   if (len > TELEMETRY_UART_PAYLOAD_CAPACITY || (len && !payload)) return 0U;
   const uint32_t primask = telemetry_uart_irq_save();
-  if (g_telemetry_uart.tx_count == TELEMETRY_UART_QUEUE_DEPTH) {
+  unsigned buffer = len + TELEMETRY_UART_HEADER_SIZE <= TELEMETRY_UART_SMALL_FRAME_SIZE ?
+      0U : TELEMETRY_UART_SMALL_DEPTH;
+  while (buffer < TELEMETRY_UART_QUEUE_DEPTH &&
+         (g_telemetry_uart.tx_buffer_used & (1UL << buffer))) ++buffer;
+  if (g_telemetry_uart.tx_count == TELEMETRY_UART_QUEUE_DEPTH ||
+      buffer == TELEMETRY_UART_QUEUE_DEPTH) {
     g_gateway_uart_tx_queue_drops++; /* Rejected; router retains reliable data. */
     telemetry_uart_irq_restore(primask);
     return 0U;
   }
   const unsigned slot = g_telemetry_uart.tx_tail;
+  g_telemetry_uart.tx_buffers[slot] = buffer;
+  g_telemetry_uart.tx_buffer_used |= 1UL << buffer;
   g_telemetry_uart.tx_lengths[slot] = telemetry_uart_build_frame(
-      g_telemetry_uart.tx_payloads[slot], magic, payload, len);
+      telemetry_uart_tx_buffer(slot), magic, payload, len);
   g_telemetry_uart.tx_tail = (slot + 1U) % TELEMETRY_UART_QUEUE_DEPTH;
   g_telemetry_uart.tx_count++;
   g_gateway_uart_tx_enqueued++;
@@ -555,16 +576,17 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart) {
   if (g_telemetry_uart.tx_active && !g_telemetry_uart.tx_error) {
     const unsigned slot = g_telemetry_uart.tx_head;
     gateway_status_observe(GW_STATUS_UART_SENT,
-        g_telemetry_uart.tx_payloads[slot] + TELEMETRY_UART_HEADER_SIZE,
+        telemetry_uart_tx_buffer(slot) + TELEMETRY_UART_HEADER_SIZE,
         g_telemetry_uart.tx_lengths[slot] - TELEMETRY_UART_HEADER_SIZE,
         SEDS_DT_UMBILICAL_STATUS, tx_time_get());
 #ifdef SEDS_FIRMWARE_SIM_TEST
     if (sim_probe_packed_data_type(
-            g_telemetry_uart.tx_payloads[slot] + TELEMETRY_UART_HEADER_SIZE,
+            telemetry_uart_tx_buffer(slot) + TELEMETRY_UART_HEADER_SIZE,
             g_telemetry_uart.tx_lengths[slot] - TELEMETRY_UART_HEADER_SIZE)
         == (uint32_t)SEDS_DT_UMBILICAL_STATUS) g_sim_uart_umbilical_status_count++;
 #endif
     g_telemetry_uart.tx_active = 0U;
+    telemetry_uart_tx_release(slot);
     g_telemetry_uart.tx_head = (g_telemetry_uart.tx_head + 1U) % TELEMETRY_UART_QUEUE_DEPTH;
     g_telemetry_uart.tx_count--;
     g_telemetry_uart.tx_attempts = 0U;
@@ -606,11 +628,12 @@ static void telemetry_uart_flush_tx_queue(void) {
       g_telemetry_uart.tx_error = 0U;
       g_gateway_uart_tx_failures++;
       gateway_status_observe(GW_STATUS_UART_FAILED,
-          g_telemetry_uart.tx_payloads[slot] + TELEMETRY_UART_HEADER_SIZE,
+          telemetry_uart_tx_buffer(slot) + TELEMETRY_UART_HEADER_SIZE,
           g_telemetry_uart.tx_lengths[slot] - TELEMETRY_UART_HEADER_SIZE,
           SEDS_DT_UMBILICAL_STATUS, tx_time_get());
       if (++g_telemetry_uart.tx_attempts >= 3U) {
         g_gateway_uart_tx_exhausted++;
+        telemetry_uart_tx_release(slot);
         g_telemetry_uart.tx_head = (slot + 1U) % TELEMETRY_UART_QUEUE_DEPTH;
         g_telemetry_uart.tx_count--;
         g_telemetry_uart.tx_attempts = 0U;

@@ -56,7 +56,7 @@ class QualificationContractTests(unittest.TestCase):
         can = (root / "Core" / "Src" / "can_bus.c").read_text(encoding="utf-8")
 
         self.assertIn("#define TELEMETRY_UART_MAX_PAYLOAD 1024U", uart_h)
-        self.assertIn("#define TELEMETRY_UART_QUEUE_DEPTH 4U", uart_c)
+        self.assertIn("#define TELEMETRY_UART_QUEUE_DEPTH (TELEMETRY_UART_SMALL_DEPTH + TELEMETRY_UART_LARGE_DEPTH)", uart_c)
         self.assertIn("#define TELEMETRY_UART_RX_RING_DEPTH 8U", uart_c)
         self.assertNotIn("HAL_UART_Receive_IT", uart_c)
         self.assertIn("READ_REG(g_telemetry_uart.huart->Instance->RDR)", uart_c)

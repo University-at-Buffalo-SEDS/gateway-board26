@@ -30,14 +30,18 @@ volatile uint32_t g_gateway_admission_last_largest;
 
 /* A fixed bitmap avoids heap headers and bounds each search to 32 blocks.
  * Only the allocation start records its length; pointers never move. */
-static int reserve_find(size_t size)
+static int reserve_find_in(size_t size, uint32_t used)
 {
     if (!large_slots || size == 0U || size > RESERVE_BLOCK_BYTES * RESERVE_BLOCK_COUNT) return -1;
     const unsigned blocks = (size + RESERVE_BLOCK_BYTES - 1U) / RESERVE_BLOCK_BYTES;
     const uint32_t bits = UINT32_MAX >> (RESERVE_BLOCK_COUNT - blocks);
     for (unsigned i = 0; i + blocks <= RESERVE_BLOCK_COUNT; ++i)
-        if ((reserve_used & (bits << i)) == 0U) return (int)i;
+        if ((used & (bits << i)) == 0U) return (int)i;
     return -1;
+}
+static int reserve_find(size_t size)
+{
+    return reserve_find_in(size, reserve_used);
 }
 static void *large_slot_allocate(size_t size)
 {
@@ -235,11 +239,12 @@ bool telemetry_tlsf_admit(size_t additional, size_t largest)
         } else {
             /* A discovery snapshot clones many small strings, not just its
              * largest block. If TLSF cannot supply scratch, the fallback
-             * must cover its largest buffer and control reserve; ordinary
-             * fragmented blocks must cover the remaining operation budget. */
+             * must cover its largest buffer. Ordinary fragmented blocks
+             * may hold the rest of the operation and the control reserve;
+             * requiring both reserves in this pool strands usable memory. */
             const size_t reserve_free = RESERVE_BLOCK_BYTES * RESERVE_BLOCK_COUNT - reserve_live_bytes;
             const bool slot_available = reserve_find(largest) >= 0 &&
-                largest <= reserve_free && reserve <= reserve_free - largest;
+                largest <= reserve_free;
             const size_t padding = slot_available ?
                 ((largest + RESERVE_BLOCK_BYTES - 1U) / RESERVE_BLOCK_BYTES) * RESERVE_BLOCK_BYTES - largest : 0U;
             if (tlsf_can_memalign(allocator, 8U, largest)) {
@@ -247,22 +252,32 @@ bool telemetry_tlsf_admit(size_t additional, size_t largest)
             } else {
                 allowed = slot_available && padding <= available - additional - reserve;
                 /* Fragmented ordinary blocks can still hold the small strings
-                 * in a discovery snapshot. Hold their full budget while
+                 * in a discovery snapshot. Hold their budget and safety reserve while
                  * testing, then release it, rather than rejecting discovery
                  * forever just because its largest buffer needs fallback. */
                 void *head = NULL;
-                size_t remaining = additional > largest ? additional - largest : 0U;
+                uint32_t trial_used = reserve_used;
+                const int index = reserve_find(largest);
+                if (allowed) {
+                    const unsigned blocks = (largest + RESERVE_BLOCK_BYTES - 1U) / RESERVE_BLOCK_BYTES;
+                    trial_used |= (UINT32_MAX >> (RESERVE_BLOCK_COUNT - blocks)) << (unsigned)index;
+                }
+                size_t remaining = (additional > largest ? additional - largest : 0U) + reserve;
                 unsigned probes = 0U;
                 while (allowed && remaining != 0U && probes++ < 128U) {
                     const size_t chunk = remaining > 128U ? 128U : remaining;
                     void *block = tlsf_memalign(allocator, 8U,
                         chunk < sizeof(void *) ? sizeof(void *) : chunk);
-                    if (!block) { allowed = false; break; }
+                    if (!block) break;
                     *(void **)block = head;
                     head = block;
                     remaining -= chunk;
                 }
-                if (remaining != 0U) allowed = false;
+                /* Remaining small objects/reserve may use the unused bitmap
+                 * pool too. Model that ownership without touching its contents
+                 * or publishing temporary allocation counters. */
+                if (remaining != 0U && reserve_find_in(remaining, trial_used) < 0)
+                    allowed = false;
                 while (head) {
                     void *next = *(void **)head;
                     tlsf_free(allocator, head);
