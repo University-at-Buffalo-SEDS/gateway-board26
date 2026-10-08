@@ -10,6 +10,7 @@ class CurrentConversionTests(unittest.TestCase):
         for name, expected in [("CURRENT", 0x4C), ("VOLTAGE", 0x4D)]:
             value = re.search(r"#define LTC2990_I2C_ADDRESS_" + name + r"\s+\((0x[0-9A-F]+)\)", header).group(1)
             self.assertEqual(int(value, 16), expected)
+        self.assertRegex(header, r"CURRENT_DRAW_POLARITY\s+\(1\.0f\)")
 
     def test_actual_converter_signed_boundaries_and_shunt_scaling(self):
         header = (ROOT / "Core/Inc/ltc2990.h").read_text()

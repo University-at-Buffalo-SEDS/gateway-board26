@@ -44,7 +44,7 @@
 #define CURRENT_DIVIDER_RATIO      (CURRENT_DIVIDER_BOTTOM_OHM / \
                                      (CURRENT_DIVIDER_TOP_OHM + CURRENT_DIVIDER_BOTTOM_OHM))
 #define CURRENT_TELEMETRY_CHANNEL_INDEX (0U)
-#define CURRENT_DRAW_POLARITY      (-1.0f)
+#define CURRENT_DRAW_POLARITY      (1.0f) /* eFuse OUT -> R24 -> VBATT: V1 > V2 */
 
 #define TIMEOUT             1000
 
