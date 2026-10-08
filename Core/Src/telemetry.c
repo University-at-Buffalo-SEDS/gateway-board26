@@ -416,12 +416,12 @@ void telemetry_hil_capture_requested_snapshot(void) {
     telemetryFree(g_gateway_peer_probe_json);
     g_gateway_peer_probe_json = NULL;
     g_gateway_peer_probe_request = 0U;
-  } else if (request >= 1U && request <= 4U && g_router.r != NULL) {
+  } else if (((request >= 1U && request <= 4U) || (request == 6U || request == 7U)) && g_router.r != NULL) {
     static const char *const peers[] = {"GS", "AB", "VB", "DAQ"};
     g_gateway_peer_probe_result = SEDS_IO;
 #ifdef TELEMETRY_USE_TLSF
     /* The JSON export allocates scratch internally; guard that too. */
-    if (!telemetry_tlsf_admit(8192U, 2048U)) {
+    if (!telemetry_tlsf_admit(10240U, 2048U)) {
       g_gateway_peer_probe_request = 0U;
       return;
     }
@@ -431,13 +431,21 @@ void telemetry_hil_capture_requested_snapshot(void) {
     return;
 #endif
     if (g_gateway_peer_probe_json == NULL)
-      g_gateway_peer_probe_json = telemetry_can_tx_allocate(1024U);
+      g_gateway_peer_probe_json = telemetry_can_tx_allocate(2048U);
     if (g_gateway_peer_probe_json != NULL) {
       g_gateway_peer_probe_json[0] = '\0';
       telemetry_lock();
-      const char *peer = peers[request - 1U];
-      g_gateway_peer_probe_result = seds_router_export_client_stats(
-          g_router.r, peer, strlen(peer), g_gateway_peer_probe_json, 1024U);
+      if (request == 6U) {
+        g_gateway_peer_probe_result = seds_router_export_memory_layout(
+            g_router.r, g_gateway_peer_probe_json, 2048U);
+      } else if (request == 7U) {
+        g_gateway_peer_probe_result = seds_router_export_topology(
+            g_router.r, g_gateway_peer_probe_json, 2048U);
+      } else {
+        const char *peer = peers[request - 1U];
+        g_gateway_peer_probe_result = seds_router_export_client_stats(
+            g_router.r, peer, strlen(peer), g_gateway_peer_probe_json, 2048U);
+      }
       telemetry_unlock();
     }
     peer_probe_tick = now;
@@ -572,6 +580,11 @@ static void telemetry_board_link_rx(const uint8_t *data, size_t len, void *user)
 }
 #endif
 
+volatile uint32_t g_gateway_can_rx_handoff_fail;
+volatile int32_t g_gateway_can_rx_handoff_last;
+volatile uint32_t g_gateway_queue_service_fail;
+volatile int32_t g_gateway_queue_service_last;
+
 void rx_asynchronous(const uint8_t *bytes, size_t len) {
 #ifndef TELEMETRY_ENABLED
   (void)bytes;
@@ -603,6 +616,8 @@ void rx_asynchronous(const uint8_t *bytes, size_t len) {
   telemetry_unlock();
 
   if (result != SEDS_OK) {
+    ++g_gateway_can_rx_handoff_fail;
+    g_gateway_can_rx_handoff_last = result;
     telemetry_signal_deserialize_failure();
   } else {
     g_telemetry_discovery_seen = 1U;
@@ -1049,6 +1064,10 @@ SedsResult process_all_queues_timeout(uint32_t timeout_ms) {
   const SedsResult result =
       seds_router_process_all_queues_with_timeout(g_router.r, timeout_ms);
   telemetry_unlock();
+  if (result != SEDS_OK) {
+    ++g_gateway_queue_service_fail;
+    g_gateway_queue_service_last = result;
+  }
   return result;
 #endif
 }

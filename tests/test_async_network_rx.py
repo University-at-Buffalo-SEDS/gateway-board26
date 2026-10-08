@@ -5,7 +5,7 @@ ROOT=Path(__file__).resolve().parents[1]
 class AsyncReceiveTests(unittest.TestCase):
     def test_handoff_copies_wire_and_does_not_dispatch_in_can_callback(self):
         source=(ROOT/"Core/Src/telemetry.c").read_text()
-        start=source.index("void rx_asynchronous(")
+        start=source.index("volatile uint32_t g_gateway_can_rx_handoff_fail")
         end=source.index("static UNUSED_FUNCTION void rx_synchronous",start)
         code=r"""
 #include <assert.h>
@@ -40,6 +40,7 @@ int main(void){
  // Rejecting queue pressure must remain observable and never fake success.
  g_telemetry_discovery_seen=0;fail=1;rx_asynchronous(wire,4);
  assert(queued==1 && errors==1 && !g_telemetry_discovery_seen);
+ assert(g_gateway_can_rx_handoff_fail==1 && g_gateway_can_rx_handoff_last==-1);
  fail=0;g_can_side_id=-1;rx_asynchronous(wire,4);assert(queued==2);
  rx_asynchronous(0,0);assert(queued==2);
 }

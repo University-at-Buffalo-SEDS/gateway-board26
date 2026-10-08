@@ -16,16 +16,18 @@ class PeerProbeTests(unittest.TestCase):
         static uint32_t g_gateway_peer_probe_request, peer_probe_tick, tick, allocations, frees, exports;
         static int32_t g_gateway_peer_probe_result;
         static char *g_gateway_peer_probe_json;
-        static char memory[1024];
+        static char memory[2048];
         static int refuse, guard=1;
         static struct {void *r;} g_router={memory};
         static uint32_t HAL_GetTick(void){return tick;}
-        static int telemetry_tlsf_admit(size_t n,size_t b){assert(n==8192&&b==2048);return guard;}
-        static void *telemetry_can_tx_allocate(size_t n){assert(n==1024);allocations++;return refuse?NULL:memory;}
+        static int telemetry_tlsf_admit(size_t n,size_t b){assert(n==10240&&b==2048);return guard;}
+        static void *telemetry_can_tx_allocate(size_t n){assert(n==2048);allocations++;return refuse?NULL:memory;}
         static void telemetryFree(void *p){assert(p==NULL||p==memory);if(p)frees++;}
         static void telemetry_lock(void){}
         static void telemetry_unlock(void){}
-        static int seds_router_export_client_stats(void *r,const char *peer,size_t len,char *p,size_t n){assert(r&&p==memory&&n==1024&&len==strlen(peer));exports++;strcpy(p,peer);return 0;}
+        static int seds_router_export_client_stats(void *r,const char *peer,size_t len,char *p,size_t n){assert(r&&p==memory&&n==2048&&len==strlen(peer));exports++;strcpy(p,peer);return 0;}
+        static int seds_router_export_memory_layout(void *r,char *p,size_t n){assert(r&&p==memory&&n==2048);exports++;strcpy(p,"layout");return 0;}
+        static int seds_router_export_topology(void *r,char *p,size_t n){assert(r&&p==memory&&n==2048);exports++;strcpy(p,"topology");return 0;}
         ''' +func+r'''
         int main(void){
          telemetry_hil_capture_requested_snapshot();assert(allocations==0);
@@ -38,6 +40,8 @@ class PeerProbeTests(unittest.TestCase):
          tick=UINT32_MAX-100;g_gateway_peer_probe_request=1;telemetry_hil_capture_requested_snapshot();tick=9900;telemetry_hil_capture_requested_snapshot();assert(frees==2);
          g_gateway_peer_probe_request=3;telemetry_hil_capture_requested_snapshot();assert(!strcmp(memory,"VB"));
          g_gateway_peer_probe_request=4;telemetry_hil_capture_requested_snapshot();assert(!strcmp(memory,"DAQ"));
+         g_gateway_peer_probe_request=6;telemetry_hil_capture_requested_snapshot();assert(!strcmp(memory,"layout"));
+         g_gateway_peer_probe_request=7;telemetry_hil_capture_requested_snapshot();assert(!strcmp(memory,"topology"));
          g_gateway_peer_probe_request=5;telemetry_hil_capture_requested_snapshot();assert(frees==3 && !g_gateway_peer_probe_json && !g_gateway_peer_probe_request);
         }
         '''
