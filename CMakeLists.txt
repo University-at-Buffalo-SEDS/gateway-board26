@@ -126,7 +126,7 @@ set(SEDSNET_MAX_STACK_PAYLOAD "128" CACHE STRING "" FORCE)
 set(SEDSNET_MAX_QUEUE_BUDGET "16384" CACHE STRING
     "Bound SEDSNet queues below the Gateway shared ThreadX pool reserve" FORCE)
 set(SEDSNET_MAX_RECENT_RX_IDS "16" CACHE STRING "" FORCE)
-set(SEDSNET_ENV_STARTING_QUEUE_SIZE "1024" CACHE STRING
+set(SEDSNET_ENV_STARTING_QUEUE_SIZE "2048" CACHE STRING
     "Preallocate useful fixed-capacity Gateway queues while memory is contiguous" FORCE)
 set(SEDSNET_ENV_QUEUE_GROW_STEP "1.0" CACHE STRING
     "Use fixed-capacity queues to prevent ThreadX byte-pool fragmentation" FORCE)

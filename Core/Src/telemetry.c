@@ -588,13 +588,17 @@ void rx_asynchronous(const uint8_t *bytes, size_t len) {
     return;
   }
 
+  /* Foreground reassembly hands ownership to the bounded network RX queue.
+   * Do not route/dispatch each CAN packet while the hardware ring waits.
+   * Side transport decoding still happens here so template-dependent frames
+   * remain in wire order; canonical packets are scheduled by network priority. */
   if (g_can_side_id >= 0) {
     telemetry_lock();
-    result = seds_router_receive_packed_from_side(
+    result = seds_router_rx_packed_packet_to_queue_from_side(
         g_router.r, (uint32_t)g_can_side_id, bytes, len);
   } else {
     telemetry_lock();
-    result = seds_router_receive_packed(g_router.r, bytes, len);
+    result = seds_router_rx_packed_packet_to_queue(g_router.r, bytes, len);
   }
   telemetry_unlock();
 

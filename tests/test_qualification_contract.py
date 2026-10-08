@@ -125,7 +125,7 @@ class QualificationContractTests(unittest.TestCase):
         self.assertNotIn("< (uint32_t)frag_cnt", can_bus)
         self.assertIn("BOARD_CAN_MAX_FRAME_BYTES 128U", telemetry)
         self.assertIn('SEDSNET_MAX_QUEUE_BUDGET "16384"', cmake)
-        self.assertIn('SEDSNET_ENV_STARTING_QUEUE_SIZE "1024"', cmake)
+        self.assertIn('SEDSNET_ENV_STARTING_QUEUE_SIZE "2048"', cmake)
         self.assertIn('SEDSNET_ENV_QUEUE_GROW_STEP "1.0"', cmake)
 
     def test_physical_bridge_preserves_the_packed_wire_image(self):
