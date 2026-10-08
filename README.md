@@ -162,3 +162,7 @@ reading it. The probe reserves scratch headroom before using a temporary 1 KiB
 buffer, returns an error under pressure, and frees the buffer after ten seconds
 or request 5. It is idle unless explicitly requested. Full topology exports
 are unsuitable for this board's live memory budget.
+
+## Return-route liveness under memory pressure
+
+Use SEDSnet main/dev commit `6568de6` (4.1.4) or newer. Earlier versions can expire a live GroundStation return route when allocator admission refuses its discovery updates, while commands still reach CAN boards. Router and Relay now refresh a known ingress peer from CRC-valid self-describing frames before payload admission, without allocating or modifying schema/reachability. Small pressure keepalives use bounded control headroom. Rebuilding this board fetches the latest selected main/dev source.
