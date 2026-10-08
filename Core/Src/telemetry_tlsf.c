@@ -260,8 +260,8 @@ bool telemetry_tlsf_admit(size_t additional, size_t largest)
                 void *head = NULL;
                 size_t remaining = (additional > largest ? additional - largest : 0U) + reserve;
                 unsigned probes = 0U;
-                while (allowed && remaining != 0U && probes++ < 512U) {
-                    const size_t chunk = remaining > 32U ? 32U : remaining;
+                while (allowed && remaining != 0U && probes++ < 128U) {
+                    const size_t chunk = remaining > 128U ? 128U : remaining;
                     void *block = tlsf_memalign(allocator, 8U,
                         chunk < sizeof(void *) ? sizeof(void *) : chunk);
                     if (!block) break;
