@@ -49,8 +49,8 @@
 #define TIMEOUT             1000
 
 
-#define LTC2990_I2C_ADDRESS_VOLTAGE (0x4C)
-#define LTC2990_I2C_ADDRESS_CURRENT (0x4D)
+#define LTC2990_I2C_ADDRESS_VOLTAGE (0x4D)
+#define LTC2990_I2C_ADDRESS_CURRENT (0x4C)
 
 
 typedef enum {

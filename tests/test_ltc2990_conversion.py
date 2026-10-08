@@ -5,6 +5,12 @@ import unittest
 from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 class CurrentConversionTests(unittest.TestCase):
+    def test_gateway_sensor_addresses_match_schematic_straps(self):
+        header = (ROOT / "Core/Inc/ltc2990.h").read_text()
+        for name, expected in [("CURRENT", 0x4C), ("VOLTAGE", 0x4D)]:
+            value = re.search(r"#define LTC2990_I2C_ADDRESS_" + name + r"\s+\((0x[0-9A-F]+)\)", header).group(1)
+            self.assertEqual(int(value, 16), expected)
+
     def test_actual_converter_signed_boundaries_and_shunt_scaling(self):
         header = (ROOT / "Core/Inc/ltc2990.h").read_text()
         source = (ROOT / "Core/Src/ltc2990.c").read_text()
