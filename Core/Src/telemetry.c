@@ -94,11 +94,7 @@ static int32_t g_board_link_side_id = -1;
 #endif
 
 #define GATEWAY_UART_MAX_FRAME_BYTES TELEMETRY_UART_MAX_PAYLOAD
-/* GroundStation currently uses eight distinct packed header templates during
- * discovery, managed-variable sync, and command traffic. Keeping only four
- * makes the Gateway evict an early full template and silently discard the
- * later compact command that refers to it. Leave headroom without using the
- * hosted default of 64 on this memory-constrained MCU. */
+/* Bounded UART dictionary; keep the retained footprint within the MCU pool. */
 #define GATEWAY_SIDE_TRANSPORT_TEMPLATES 16U
 static uint8_t g_local_unix_valid = 0U;
 static uint64_t g_local_unix_ms = 0ULL;

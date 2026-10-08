@@ -15,10 +15,12 @@ volatile uint32_t g_telemetry_tlsf_live_bytes;
 static uint32_t live_allocations;
 /* Keep decode-sized blocks out of the small-packet allocation stream. These
  * slots are carved from the existing pool, not additional static RAM. */
-#define LARGE_SLOT_BYTES 4096U
-#define LARGE_SLOT_COUNT 2U
+/* Eight KiB carved from the existing allocator region. */
+#ifndef RESERVE_BLOCK_BYTES
 #define RESERVE_BLOCK_BYTES 256U
+#endif
 #define RESERVE_BLOCK_COUNT 32U
+#define LARGE_RESERVE_BYTES (RESERVE_BLOCK_BYTES * RESERVE_BLOCK_COUNT)
 static uint8_t *large_slots;
 static uint32_t reserve_used;
 static uint8_t reserve_lengths[RESERVE_BLOCK_COUNT];
@@ -59,7 +61,7 @@ static void *large_slot_allocate(size_t size)
 static int large_slot_index(void *ptr)
 {
     const uintptr_t address = (uintptr_t)ptr, start = (uintptr_t)large_slots;
-    if (!large_slots || address < start || address >= start + LARGE_SLOT_COUNT * LARGE_SLOT_BYTES)
+    if (!large_slots || address < start || address >= start + LARGE_RESERVE_BYTES)
         return -1;
     return (address - start) / RESERVE_BLOCK_BYTES;
 }
@@ -103,7 +105,7 @@ static void snapshot(void)
     for (unsigned i = 0; i < region_count; ++i)
         tlsf_walk_pool(regions[i], snapshot_block, NULL);
     if (large_slots) {
-        g_telemetry_tlsf_free_bytes += LARGE_SLOT_COUNT * LARGE_SLOT_BYTES - reserve_live_bytes;
+        g_telemetry_tlsf_free_bytes += LARGE_RESERVE_BYTES - reserve_live_bytes;
         unsigned run = 0;
         for (unsigned i = 0; i < RESERVE_BLOCK_COUNT; ++i) {
             if (reserve_used & (1UL << i)) run = 0;
@@ -146,11 +148,11 @@ static int initialize(void)
         regions[region_count++] = region;
         g_telemetry_tlsf_region_bytes += bytes;
     }
-    large_slots = tlsf_memalign(allocator, 8U, LARGE_SLOT_COUNT * LARGE_SLOT_BYTES);
+    large_slots = tlsf_memalign(allocator, 8U, LARGE_RESERVE_BYTES);
     if (!large_slots) goto fail;
     /* Reserve ownership overhead/padding conservatively in admission accounting. */
     g_telemetry_tlsf_region_bytes -= tlsf_block_size(large_slots) -
-        LARGE_SLOT_COUNT * LARGE_SLOT_BYTES + 2U * sizeof(void *);
+        LARGE_RESERVE_BYTES + 2U * sizeof(void *);
     g_telemetry_tlsf_active = 1;
     snapshot();
     return 1;
@@ -256,16 +258,10 @@ bool telemetry_tlsf_admit(size_t additional, size_t largest)
                  * testing, then release it, rather than rejecting discovery
                  * forever just because its largest buffer needs fallback. */
                 void *head = NULL;
-                uint32_t trial_used = reserve_used;
-                const int index = reserve_find(largest);
-                if (allowed) {
-                    const unsigned blocks = (largest + RESERVE_BLOCK_BYTES - 1U) / RESERVE_BLOCK_BYTES;
-                    trial_used |= (UINT32_MAX >> (RESERVE_BLOCK_COUNT - blocks)) << (unsigned)index;
-                }
                 size_t remaining = (additional > largest ? additional - largest : 0U) + reserve;
                 unsigned probes = 0U;
-                while (allowed && remaining != 0U && probes++ < 128U) {
-                    const size_t chunk = remaining > 128U ? 128U : remaining;
+                while (allowed && remaining != 0U && probes++ < 512U) {
+                    const size_t chunk = remaining > 32U ? 32U : remaining;
                     void *block = tlsf_memalign(allocator, 8U,
                         chunk < sizeof(void *) ? sizeof(void *) : chunk);
                     if (!block) break;
@@ -273,11 +269,10 @@ bool telemetry_tlsf_admit(size_t additional, size_t largest)
                     head = block;
                     remaining -= chunk;
                 }
-                /* Remaining small objects/reserve may use the unused bitmap
-                 * pool too. Model that ownership without touching its contents
-                 * or publishing temporary allocation counters. */
-                if (remaining != 0U && reserve_find_in(remaining, trial_used) < 0)
-                    allowed = false;
+                /* Budget small objects against ordinary blocks. A 24-byte
+                 * object consumes an entire fallback slot, so a contiguous
+                 * free run cannot stand in for many small allocations. */
+                allowed = allowed && remaining == 0U;
                 while (head) {
                     void *next = *(void **)head;
                     tlsf_free(allocator, head);

@@ -92,9 +92,12 @@ int main(int argc,char**argv){
   assert(reserve_live_bytes==2816);
   const uint32_t pinned_bitmap=reserve_used,pinned_live=g_telemetry_tlsf_live_bytes;
   // Consume ordinary fragments until the operation needs both pools.
-  void *small[256];unsigned small_count=0;
-  while(small_count<256 && (small[small_count]=ordinary_only(128)))small_count++;
+  void *small[2048];unsigned small_count=0;
+  while(small_count<2048 && (small[small_count]=ordinary_only(32)))small_count++;
   assert(!telemetry_tlsf_admit(8192,2048)); // No room for the full safety reserve.
+  // An empty ordinary heap cannot budget tiny objects as one fallback run.
+  // Previously this admitted 4 KiB even though each tiny object needs a slot.
+  assert(!telemetry_tlsf_admit(4096,2048));
   for(unsigned i=0;i<small_count;i++)telemetry_tlsf_free(small[i]);
   assert(telemetry_tlsf_admit(8192,2048));
   assert(reserve_used==pinned_bitmap&&g_telemetry_tlsf_live_bytes==pinned_live);
