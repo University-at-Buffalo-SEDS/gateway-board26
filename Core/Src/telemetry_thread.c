@@ -110,7 +110,9 @@ void telemetry_thread_entry(ULONG initial_input)
             SERVICE(4, (void)telemetry_poll_timesync());
         }
         SERVICE(5, ota_stream_poll());
-        SERVICE(2, (void)process_all_queues_timeout(TELEMETRY_QUEUE_SERVICE_BUDGET_MS));
+        /* The do/while above always services RX/TX, including an empty CAN
+         * ring. Do not repeat discovery/time-sync maintenance here. OTA TX
+         * drains at the start of the next loop before new CAN admission. */
 #ifdef TELEMETRY_BOARD_LINK_UART
         board_link_uart_process();
 #endif
