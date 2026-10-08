@@ -6,6 +6,7 @@
 #include "flight_state_cache.h"
 #include "sim_network_probe.h"
 #include "gateway_status_probe.h"
+volatile uint32_t g_gateway_protocol_ack_path[4];
 #ifdef GATEWAY_HIL_DIAGNOSTICS
 volatile gateway_status_probe g_gateway_status_path[4];
 gateway_probe_template g_gateway_status_templates[2][GATEWAY_STATUS_TEMPLATE_CAPACITY];
@@ -22,10 +23,10 @@ uint32_t g_gateway_status_next[2];
 #include "sedsnet_config.h"
 #ifdef SEDS_ENABLE_COMPACT_PACKET_STORE
 #ifndef GATEWAY_PACKET_ARENA_BYTES
-#define GATEWAY_PACKET_ARENA_BYTES 8192U
+#define GATEWAY_PACKET_ARENA_BYTES 2048U
 #endif
 #ifndef GATEWAY_PACKET_ARENA_HANDLES
-#define GATEWAY_PACKET_ARENA_HANDLES 64U
+#define GATEWAY_PACKET_ARENA_HANDLES 16U
 #endif
 #define BOARD_PACKET_ARENA_BYTES GATEWAY_PACKET_ARENA_BYTES
 #define BOARD_PACKET_ARENA_HANDLES GATEWAY_PACKET_ARENA_HANDLES
@@ -83,7 +84,11 @@ static uint8_t g_board_link_rx_subscribed = 0U;
 #endif
 static int32_t g_can_side_id = -1;
 #define BOARD_CAN_MAX_FRAME_BYTES 128U
-#define BOARD_SIDE_TRANSPORT_TEMPLATES 4U
+/* This is the receive cache for the whole shared CAN segment, not one
+ * dictionary per board. Four entries churn under DAQ + valve + actuator
+ * traffic, costing allocations and dropping compact frames between refreshes.
+ * Keep a bounded aggregate cache while allocator admission protects growth. */
+#define BOARD_SIDE_TRANSPORT_TEMPLATES 32U
 #ifdef TELEMETRY_BOARD_LINK_UART
 static int32_t g_board_link_side_id = -1;
 #endif
@@ -116,6 +121,15 @@ volatile int32_t g_gateway_hil_runtime_result = SEDS_ERR;
 char g_gateway_hil_topology[4096];
 char g_gateway_hil_runtime[3072];
 #endif
+
+/* Requested once by a debugger: 1 GS, 2 AB, 3 VB, 4 DAQ, 5 release.
+ * One-peer export avoids cloning the full network topology. */
+volatile uint32_t g_gateway_peer_probe_request;
+volatile int32_t g_gateway_peer_probe_result;
+char *g_gateway_peer_probe_json;
+static uint32_t peer_probe_tick;
+extern void *telemetry_can_tx_allocate(size_t bytes);
+extern void telemetryFree(void *ptr);
 
 SedsResult tx_send(const uint8_t *bytes, size_t len, void *user);
 
@@ -395,6 +409,48 @@ void telemetry_set_unix_time_ms(uint64_t unix_ms) {
 }
 
 void telemetry_hil_capture_requested_snapshot(void) {
+  const uint32_t request = g_gateway_peer_probe_request;
+  const uint32_t now = HAL_GetTick();
+  if (request == 5U || (request == 0U && g_gateway_peer_probe_json != NULL &&
+                       (uint32_t)(now - peer_probe_tick) >= 10000U)) {
+    telemetryFree(g_gateway_peer_probe_json);
+    g_gateway_peer_probe_json = NULL;
+    g_gateway_peer_probe_request = 0U;
+  } else if (((request >= 1U && request <= 4U) || (request == 6U || request == 7U)) && g_router.r != NULL) {
+    static const char *const peers[] = {"GS", "AB", "VB", "DAQ"};
+    g_gateway_peer_probe_result = SEDS_IO;
+#ifdef TELEMETRY_USE_TLSF
+    /* The JSON export allocates scratch internally; guard that too. */
+    if (!telemetry_tlsf_admit(10240U, 2048U)) {
+      g_gateway_peer_probe_request = 0U;
+      return;
+    }
+#else
+    /* This diagnostic is qualified only with the TLSF memory probe. */
+    g_gateway_peer_probe_request = 0U;
+    return;
+#endif
+    if (g_gateway_peer_probe_json == NULL)
+      g_gateway_peer_probe_json = telemetry_can_tx_allocate(2048U);
+    if (g_gateway_peer_probe_json != NULL) {
+      g_gateway_peer_probe_json[0] = '\0';
+      telemetry_lock();
+      if (request == 6U) {
+        g_gateway_peer_probe_result = seds_router_export_memory_layout(
+            g_router.r, g_gateway_peer_probe_json, 2048U);
+      } else if (request == 7U) {
+        g_gateway_peer_probe_result = seds_router_export_topology(
+            g_router.r, g_gateway_peer_probe_json, 2048U);
+      } else {
+        const char *peer = peers[request - 1U];
+        g_gateway_peer_probe_result = seds_router_export_client_stats(
+            g_router.r, peer, strlen(peer), g_gateway_peer_probe_json, 2048U);
+      }
+      telemetry_unlock();
+    }
+    peer_probe_tick = now;
+    g_gateway_peer_probe_request = 0U;
+  }
 #ifdef GATEWAY_HIL_DIAGNOSTICS
   if (g_gateway_hil_snapshot_request == 0U || g_router.r == NULL) {
     return;
@@ -419,7 +475,8 @@ static uint64_t node_now_since_ms(void *user) {
   return s.r ? (now - s.start_time) : 0ULL;
 }
 
-SedsResult tx_send(const uint8_t *bytes, size_t len, void *user) {
+static SedsResult tx_send_with_priority(const uint8_t *bytes, size_t len,
+                                        uint8_t priority, void *user) {
   HAL_StatusTypeDef status = HAL_ERROR;
   (void)user;
 
@@ -435,7 +492,8 @@ SedsResult tx_send(const uint8_t *bytes, size_t len, void *user) {
 #endif
 
   const uint32_t can_id =
-      sim_probe_packed_data_type(bytes, len) == (uint32_t)SEDS_DT_HEARTBEAT
+      (priority >= 200U ||
+       sim_probe_packed_data_type(bytes, len) == (uint32_t)SEDS_DT_HEARTBEAT)
           ? 0x004U
           : 0x104U;
   status = can_bus_send_large(bytes, len, can_id);
@@ -446,6 +504,11 @@ SedsResult tx_send(const uint8_t *bytes, size_t len, void *user) {
 
   return SEDS_IO;
 }
+
+SedsResult tx_send(const uint8_t *bytes, size_t len, void *user) {
+  return tx_send_with_priority(bytes, len, 0U, user);
+}
+
 
 #ifdef TELEMETRY_BOARD_LINK_UART
 static SedsResult board_link_tx_send(const uint8_t *bytes, size_t len, void *user) {
@@ -517,6 +580,11 @@ static void telemetry_board_link_rx(const uint8_t *data, size_t len, void *user)
 }
 #endif
 
+volatile uint32_t g_gateway_can_rx_handoff_fail;
+volatile int32_t g_gateway_can_rx_handoff_last;
+volatile uint32_t g_gateway_queue_service_fail;
+volatile int32_t g_gateway_queue_service_last;
+
 void rx_asynchronous(const uint8_t *bytes, size_t len) {
 #ifndef TELEMETRY_ENABLED
   (void)bytes;
@@ -533,17 +601,23 @@ void rx_asynchronous(const uint8_t *bytes, size_t len) {
     return;
   }
 
+  /* Foreground reassembly hands ownership to the bounded network RX queue.
+   * Do not route/dispatch each CAN packet while the hardware ring waits.
+   * Side transport decoding still happens here so template-dependent frames
+   * remain in wire order; canonical packets are scheduled by network priority. */
   if (g_can_side_id >= 0) {
     telemetry_lock();
-    result = seds_router_receive_packed_from_side(
+    result = seds_router_rx_packed_packet_to_queue_from_side(
         g_router.r, (uint32_t)g_can_side_id, bytes, len);
   } else {
     telemetry_lock();
-    result = seds_router_receive_packed(g_router.r, bytes, len);
+    result = seds_router_rx_packed_packet_to_queue(g_router.r, bytes, len);
   }
   telemetry_unlock();
 
   if (result != SEDS_OK) {
+    ++g_gateway_can_rx_handoff_fail;
+    g_gateway_can_rx_handoff_last = result;
     telemetry_signal_deserialize_failure();
   } else {
     g_telemetry_discovery_seen = 1U;
@@ -739,8 +813,8 @@ static SedsResult init_telemetry_router_locked(void) {
     return SEDS_ERR;
   }
 
-  g_can_side_id = seds_router_add_side_packed_profile(
-      r, "can", 3U, tx_send, NULL, false,
+  g_can_side_id = seds_router_add_side_packed_profile_with_priority(
+      r, "can", 3U, tx_send_with_priority, NULL, false,
       SEDS_SIDE_TRANSPORT_PROFILE_IPV6_LIKE, BOARD_CAN_MAX_FRAME_BYTES, 0U,
       BOARD_SIDE_TRANSPORT_TEMPLATES);
   if (g_can_side_id < 0) {
@@ -990,6 +1064,10 @@ SedsResult process_all_queues_timeout(uint32_t timeout_ms) {
   const SedsResult result =
       seds_router_process_all_queues_with_timeout(g_router.r, timeout_ms);
   telemetry_unlock();
+  if (result != SEDS_OK) {
+    ++g_gateway_queue_service_fail;
+    g_gateway_queue_service_last = result;
+  }
   return result;
 #endif
 }

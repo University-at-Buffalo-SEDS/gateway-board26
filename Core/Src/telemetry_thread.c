@@ -98,7 +98,9 @@ void telemetry_thread_entry(ULONG initial_input)
             SERVICE(1, received = can_bus_process_rx_for(
                 TELEMETRY_CAN_FRAMES_PER_SLICE, TELEMETRY_CAN_SLICE_BUDGET_MS));
             SERVICE(0, telemetry_uart_process());
-            SERVICE(2, (void)dispatch_tx_queue_timeout(TELEMETRY_QUEUE_SERVICE_BUDGET_MS));
+            /* Service queued RX as well as TX between CAN batches. A TX-only
+             * pass would strand the asynchronous handoff and overflow it. */
+            SERVICE(2, (void)process_all_queues_timeout(TELEMETRY_QUEUE_SERVICE_BUDGET_MS));
             if (received == 0U || can_bus_rx_pending() == 0U) break;
         } while ((uint32_t)(HAL_GetTick() - can_started) < TELEMETRY_CAN_SERVICE_BUDGET_MS);
         const uint32_t now = HAL_GetTick();

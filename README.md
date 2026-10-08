@@ -52,7 +52,7 @@ Open the checked-in `.ioc` file and generate with the CMake toolchain. Keep user
 code enabled. The `.ioc` is the source of truth for the ThreadX and USBX pool
 sizes; unit tests compare those values with the generated Azure RTOS headers so
 regeneration cannot silently shrink, grow, or repartition the pools.
-The application pool is 72 KiB (73,728 bytes), including additional headroom
+The application pool is 74 KiB (75,776 bytes), including additional headroom
 for full-network discovery bursts; the separate large-allocation emergency
 pool remains 16 KiB. Qualification retains the 1 KiB minimum normal-pool
 reserve rather than accepting near-exhaustion as a passing result.
@@ -102,10 +102,27 @@ when the network is unavailable the last usable on-disk source is retained.
 The selected revision is printed during configure. An explicit CMake source
 override remains local and is never fetched or reset.
 
-The compact packet arena is initialized before router startup with an 8 KiB
-payload budget and 64 handles, plus fixed startup metadata.
+The compact packet arena is initialized before router startup with a 2 KiB
+payload budget and 16 handles, plus fixed startup metadata.
+The previous 8 KiB/64-handle arena reserved 10 KiB while empty and could
+starve discovery on real hardware. SEDSnet 4.1.3 retains existing heap
+payloads when optional arena parking cannot fit them; queue and allocator
+admission bounds still apply. Use `--packet-store heap` with TLSF for the
+current recovery configuration; the smaller arena remains experimental.
 It is separate from TLSF, which replaces only board-owned telemetry allocation
-hooks; ThreadX scheduling continues unchanged. The arena does not compact
+hooks; ThreadX scheduling continues unchanged. The gateway carves an 8 KiB fallback pool from the existing TLSF region,
+using 32 blocks of 256 bytes. Ordinary allocation is attempted first; failed
+requests up to 8 KiB can claim a contiguous run of fallback blocks. This covers
+both the captured 676-byte OOM and discovery decode scratch without moving live
+pointers or adding another payload copy. Pool exhaustion still rejects admission.
+When ordinary scratch allocation fails, admission checks the fallback capacity
+for the largest buffer and control reserve, and temporarily probes the remaining
+budget in ordinary 128-byte blocks (at most 128 probes). It frees every probe
+before returning. This prevents both fallback exhaustion and permanent discovery
+starvation when smaller free blocks remain.
+`g_gateway_large_slot_live` / `g_gateway_large_slot_peak` count live/peak fallback
+allocations; `g_gateway_admission_last_additional` / `g_gateway_admission_last_largest`
+record the last refused demand. The arena does not compact
 arbitrary application allocations, and queue parking remains uncompressed.
 
 ```sh
@@ -116,8 +133,32 @@ python3 build.py flash --release --allocator tlsf --packet-store compact \
 
 `--packet-store compact` selects `dev` automatically. Both Pico UART ends must
 use the same baud; 1 Mbaud is the paired Pico build, independent of the 115200
-radio link. Add `--watchdog` to enable the board-owned watchdog and use its
+radio link. The board-owned watchdog is enabled by default; use its
 matching factory bootloader. `--packet-store heap` disables the arena.
 The new arena API must be present in an offline fallback; an older source is
 rejected clearly. This candidate is for testing; linked ten-minute qualification
 and a throughput claim remain pending.
+
+CAN receive admission lets a sender use the whole ring while capacity remains. Only when the ring is full, an incoming quiet board can displace a queued frame from the board occupying the most slots; priority arbitration IDs and the consumer's tail slot are protected. FIFO order of retained frames is preserved. `g_can_rx_peer_dropped` counts displaced frames, while `g_can_rx_sender_frames` and `g_can_rx_sender_dropped` expose ingress and losses per board token. This is an overload fallback, not a lossless-delivery guarantee; legacy CAN IDs do not identify the logical priority of opaque compact/chunk frames.
+
+Gateway uses its private STM32 CRC peripheral for the existing IEEE CRC-32 checks after startup reference-vector and incremental-state checks succeed. Unsupported inputs and simulator builds retain the software table implementation. The CRC adapter preserves the interrupt mask and bounds each protected call to 4096 bytes; it does not allocate memory. `g_gateway_crc_hw_state` reports 1 for hardware active or 2 for software fallback.
+
+The shared CAN side retains up to 32 header templates, compared with 16 previously, so frequent DAQ traffic is less likely to evict quiet-board compact headers. This uses bounded heap metadata within the unchanged allocator pool; live qualification must check both traffic delivery and peak allocation.
+
+### Command and ACK admission
+
+The CAN callback uses SEDSnet's logical packet priority for every compact or
+fragmented frame. Commands and valve confirmations use priority 200; protocol
+ACKs, schema, and discovery carry their library priority. These use the low CAN
+arbitration band and cannot be evicted by ordinary telemetry in the RX ring. A
+priority frame can replace telemetry from its own sender when that sender has
+the largest backlog. The gateway, actuator, valve, and GroundStation configs
+need the matching update; this does not replace end-to-end qualification.
+
+For a passive route capture with TLSF, write `g_gateway_peer_probe_request`: 1
+for GS, 2 for AB, 3 for VB, or 4 for DAQ. The foreground task exports one peer
+to `g_gateway_peer_probe_json`; inspect `g_gateway_peer_probe_result` before
+reading it. The probe reserves scratch headroom before using a temporary 1 KiB
+buffer, returns an error under pressure, and frees the buffer after ten seconds
+or request 5. It is idle unless explicitly requested. Full topology exports
+are unsuitable for this board's live memory budget.

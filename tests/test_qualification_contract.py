@@ -31,7 +31,7 @@ class QualificationContractTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         ioc = (root / "gateway_board.ioc").read_text(encoding="utf-8")
         self.assertIn("TELEMETRY_THREAD_STACK_SIZE (13U * 1024U)", thread)
-        self.assertIn("TX_APP_MEM_POOL_SIZE                     73728", config)
+        self.assertIn("TX_APP_MEM_POOL_SIZE                     75776", config)
         self.assertIn("TX_APP_MEM_POOL_SIZE=73728", ioc)
         self.assertIn("UX_DEVICE_APP_MEM_POOL_SIZE=20904", ioc)
 
@@ -56,7 +56,7 @@ class QualificationContractTests(unittest.TestCase):
         can = (root / "Core" / "Src" / "can_bus.c").read_text(encoding="utf-8")
 
         self.assertIn("#define TELEMETRY_UART_MAX_PAYLOAD 1024U", uart_h)
-        self.assertIn("#define TELEMETRY_UART_QUEUE_DEPTH 6U", uart_c)
+        self.assertIn("#define TELEMETRY_UART_QUEUE_DEPTH 4U", uart_c)
         self.assertIn("#define TELEMETRY_UART_RX_RING_DEPTH 8U", uart_c)
         self.assertNotIn("HAL_UART_Receive_IT", uart_c)
         self.assertIn("READ_REG(g_telemetry_uart.huart->Instance->RDR)", uart_c)
@@ -152,7 +152,7 @@ class QualificationContractTests(unittest.TestCase):
         self.assertNotIn("seds_pkt_pack", bridge)
         self.assertIn("seds_router_new(node_now_since_ms", telemetry)
         self.assertNotIn("Seds_RM_", telemetry)
-        self.assertIn('r, "can", 3U, tx_send, NULL, false', telemetry)
+        self.assertIn('r, "can", 3U, tx_send_with_priority, NULL, false', telemetry)
         self.assertIn('seds_router_add_side_packed_profile(\n      r, "uart"', telemetry)
         self.assertIn('r, "uart", 4U, telemetry_uart_tx_send, NULL, false,', telemetry)
         self.assertIn("GATEWAY_UART_MAX_FRAME_BYTES", telemetry)

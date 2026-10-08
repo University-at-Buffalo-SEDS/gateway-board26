@@ -45,3 +45,8 @@ int main(void) {
         source=(ROOT/'Core/Src/telemetry.c').read_text()
         self.assertLess(source.index('(void)board_packet_store_init();'),source.index('r = seds_router_new'))
         self.assertIn('if (g_gateway_packet_store_init_result != SEDS_OK)',source)
+
+    def test_gateway_arena_leaves_discovery_headroom(self):
+        source=(ROOT/'Core/Src/telemetry.c').read_text()
+        self.assertIn('#define GATEWAY_PACKET_ARENA_BYTES 2048U',source)
+        self.assertIn('#define GATEWAY_PACKET_ARENA_HANDLES 16U',source)
