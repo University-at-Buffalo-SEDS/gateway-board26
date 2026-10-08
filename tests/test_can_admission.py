@@ -67,11 +67,12 @@ int main(void) {
    assert(daq==22 && valve==22 && actuator==3);
    assert(!rb_pop(&out));
  }
- assert(g_can_rx_peer_dropped==27000);
+ assert(g_can_rx_peer_dropped==19000); // 8,000 earlier DAQ drops avoid full-ring shifting
  assert(g_can_rx_sender_frames[5]-before_ab==3000);
  assert(g_can_rx_sender_dropped[5]==before_ab_drops);
  assert(g_can_rx_sender_dropped[7]==25000 && g_can_rx_sender_dropped[6]==25000);
- // A single sender can use the entire ring: there is no early fixed quota.
+ // Opaque compact DAQ frames must leave eight slots for quiet peers.
+ // Previously only recognizable full loadcell packets honored this reserve.
  for(unsigned i=0;i<47;i++) rb_push(0x107,compact,16);
  assert(g_rx_head!=g_rx_tail);
  can_bus_rx_frame_t saved=g_rx_ring[g_rx_tail];
@@ -79,11 +80,12 @@ int main(void) {
  rb_push(0x105,fragment,64);
  assert(!memcmp(&saved,&g_rx_ring[g_rx_tail],sizeof(saved)));
  can_bus_rx_frame_t drain;
- for(unsigned i=0;i<46;i++) {assert(rb_pop(&drain)); assert(drain.std_id==0x107);}
+ for(unsigned i=0;i<39;i++) {assert(rb_pop(&drain)); assert(drain.std_id==0x107);}
  assert(rb_pop(&drain) && drain.std_id==0x105 && !rb_pop(&drain));
  // The dominant actuator's opaque ACK/status/schema fragments must survive.
  for(unsigned i=0;i<24;i++) rb_push(0x105,compact,16);
- for(unsigned i=0;i<23;i++) rb_push(0x107,compact,16);
+ for(unsigned i=0;i<15;i++) rb_push(0x107,compact,16);
+ for(unsigned i=0;i<8;i++) rb_push(0x106,compact,16);
  unsigned critical_drops=g_can_rx_sender_dropped[5];
  for(unsigned i=0;i<3;i++) rb_push(0x005,fragment,64);
  assert(g_can_rx_sender_dropped[5]==critical_drops+3);
