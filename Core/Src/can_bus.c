@@ -321,7 +321,7 @@ static inline void rb_push(uint32_t std_id, const uint8_t *data, uint8_t len) {
       CAN_BUS_RX_RING_DEPTH - tail + head;
   if (std_id >= 0x100U &&
       occupied >= CAN_BUS_RX_RING_DEPTH - 1U - 8U &&
-      (sender == 7U || can_rx_is_bulk_loadcell(data, len))) {
+      (sender == 7U || can_rx_is_bulk_telemetry(data, len))) {
     /* DAQ's SDT compact frames do not expose their data type here. Reserve
      * quiet-peer capacity for them too; schema, commands and heartbeats use
      * the protected low CAN ID and bypass this telemetry-only shedding. */

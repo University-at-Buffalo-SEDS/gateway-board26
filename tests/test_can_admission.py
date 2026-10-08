@@ -24,18 +24,18 @@ static uint32_t g_can_rx_sender_frames[8], g_can_rx_sender_dropped[8];
 int main(void) {
  uint8_t bulk[16]={0,1,118}, status[16]={0,1,117}, fragment[64]={83,68,7,1,0,1,3,16,0};
  memcpy(fragment+9,bulk,16);
- assert(can_rx_is_bulk_loadcell(bulk,16));
- assert(can_rx_is_bulk_loadcell(fragment,64));
- fragment[5]=2; assert(!can_rx_is_bulk_loadcell(fragment,64)); fragment[5]=1;
- fragment[7]=64; assert(!can_rx_is_bulk_loadcell(fragment,64)); fragment[7]=16;
+ assert(can_rx_is_bulk_telemetry(bulk,16));
+ assert(can_rx_is_bulk_telemetry(fragment,64));
+ fragment[5]=2; assert(!can_rx_is_bulk_telemetry(fragment,64)); fragment[5]=1;
+ fragment[7]=64; assert(!can_rx_is_bulk_telemetry(fragment,64)); fragment[7]=16;
  uint8_t wrapped[32]={83,68,84,1,1}; memcpy(wrapped+5,bulk,16);
- assert(can_rx_is_bulk_loadcell(wrapped,21));
- wrapped[3]=2; assert(!can_rx_is_bulk_loadcell(wrapped,21));
- memset(wrapped+4,255,28); wrapped[3]=1; assert(!can_rx_is_bulk_loadcell(wrapped,32));
- assert(!can_rx_is_bulk_loadcell(status,16));
- assert(!can_rx_is_bulk_loadcell(NULL,16));
- for(unsigned n=0;n<7;n++) assert(!can_rx_is_bulk_loadcell(bulk,n));
- bulk[0]=64; assert(!can_rx_is_bulk_loadcell(bulk,16)); bulk[0]=0;
+ assert(can_rx_is_bulk_telemetry(wrapped,21));
+ wrapped[3]=2; assert(!can_rx_is_bulk_telemetry(wrapped,21));
+ memset(wrapped+4,255,28); wrapped[3]=1; assert(!can_rx_is_bulk_telemetry(wrapped,32));
+ assert(!can_rx_is_bulk_telemetry(status,16));
+ assert(!can_rx_is_bulk_telemetry(NULL,16));
+ for(unsigned n=0;n<7;n++) assert(!can_rx_is_bulk_telemetry(bulk,n));
+ bulk[0]=64; assert(!can_rx_is_bulk_telemetry(bulk,16)); bulk[0]=0;
  // Repeated saturation and wraparound: 39 bulk slots, eight protected slots.
  for(unsigned pass=0;pass<1000;pass++) {
    for(unsigned i=0;i<39;i++) rb_push(0x180+i,bulk,16);
@@ -104,12 +104,22 @@ int main(void) {
  for(unsigned i=0;i<16;i++) rb_push(0x107,compact,16);
  can_bus_rx_frame_t out;
  for(unsigned i=0;i<16;i++) assert(rb_pop(&out));
- rb_push(0x107,compact,16); assert(rb_pop(&out));
+ rb_push(0x107,compact,16); assert(rb_pop(&out)); uint8_t pressure[16]={0,1,111}, battery[16]={0,1,104};
+ assert(can_rx_is_bulk_telemetry(pressure,16));
+ assert(!can_rx_is_bulk_telemetry(battery,16));
+ // Pressure bursts must also leave slots for infrequent battery reports.
+ for(unsigned i=0;i<47;i++) rb_push(0x106,pressure,16);
+ for(unsigned i=0;i<8;i++) rb_push(0x106,battery,16);
+ can_bus_rx_frame_t power;
+ for(unsigned i=0;i<39;i++) {assert(rb_pop(&power));assert(power.data[2]==111);}
+ for(unsigned i=0;i<8;i++) {assert(rb_pop(&power));assert(power.data[2]==104);}
+ assert(!rb_pop(&power));
+
 }
 '''
         with tempfile.TemporaryDirectory() as tmp:
             path=Path(tmp)
-            (path/'sedsnet_config.h').write_text('#define SEDS_DT_KG1000 118U\n#define SEDS_DT_KG50 119U\n')
+            (path/'sedsnet_config.h').write_text('#define SEDS_DT_KG1000 118U\n#define SEDS_DT_KG50 119U\n#define SEDS_DT_FUEL_TANK_PRESSURE 111U\n')
             (path/'can_rx_admission.h').write_text((ROOT/'Core/Inc/can_rx_admission.h').read_text())
             exe=str(path/'admission')
             subprocess.run(['cc','-std=c11','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-I',tmp,'-x','c','-','-o',exe],input=code,text=True,check=True)

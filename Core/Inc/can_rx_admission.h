@@ -4,9 +4,10 @@
 #include <stdint.h>
 #include "sedsnet_config.h"
 
-/* Admission only: unknown, compact and fragmented packets keep normal access.
+/* Admission only: recognize frequent loadcell/pressure samples, never battery
+ * values or valve status. Unknown/fragmented packets keep normal access.
  * No templates, heap allocations, or changes to routing/schema semantics. */
-static inline int can_rx_is_bulk_loadcell(const uint8_t *p, size_t n)
+static inline int can_rx_is_bulk_telemetry(const uint8_t *p, size_t n)
 {
   if (!p || n < 3U) return 0;
   if (p[0] == 'S' && p[1] == 'D' && p[2] != 'T') {
@@ -29,6 +30,7 @@ static inline int can_rx_is_bulk_loadcell(const uint8_t *p, size_t n)
    * reliable/unknown flags protected. Existing native loadcell types are
    * non-reliable; the router still performs full decoding and validation. */
   if (n < 7U || (p[0] & 0xd2U)) return 0;
-  return p[2] == SEDS_DT_KG1000 || p[2] == SEDS_DT_KG50;
+  return p[2] == SEDS_DT_KG1000 || p[2] == SEDS_DT_KG50 ||
+         p[2] == SEDS_DT_FUEL_TANK_PRESSURE;
 }
 #endif
