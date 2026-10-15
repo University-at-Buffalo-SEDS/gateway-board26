@@ -422,6 +422,7 @@ def configure_and_build(ui: UI, cfg: BuildConfig, target: str | None = None) -> 
         "-DSEDSNET_COMPACT_PACKET_COMPRESSION=OFF",
         *([f"-DGATEWAY_PICO_UART_BAUD_RATE={cfg.pico_baud}"] if cfg.pico_baud else []),
         allocator_flag,
+        "-DGATEWAY_CACHED_TRANSIT_ADMISSION=ON",
         telemetry_flag,
         simulator_flag,
         hil_flag,

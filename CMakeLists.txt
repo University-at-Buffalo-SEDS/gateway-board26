@@ -102,7 +102,7 @@ target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
     CAN_BUS_REASM_MAX_BYTES=128
 )
 
-option(GATEWAY_CACHED_TRANSIT_ADMISSION "Experimental cached-transit scratch admission (requires integrated qualification)" OFF)
+option(GATEWAY_CACHED_TRANSIT_ADMISSION "Bounded scratch admission for warmed best-effort transit" ON)
 if(GATEWAY_CACHED_TRANSIT_ADMISSION)
     target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE GATEWAY_CACHED_TRANSIT_ADMISSION=1)
 endif()

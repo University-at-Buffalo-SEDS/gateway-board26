@@ -20,7 +20,8 @@ class OtaBuildScriptTests(unittest.TestCase):
             build.configure_and_build(mock.Mock(), cfg)
         configure = execute.call_args_list[0].args[1]
         for flag in ("-DSEDSNET_GIT_REF=main", "-DSEDSNET_COMPACT_PACKET_STORE=ON",
-                     "-DTELEMETRY_USE_TLSF=ON", "-DGATEWAY_PICO_UART_BAUD_RATE=1000000"):
+                     "-DTELEMETRY_USE_TLSF=ON", "-DGATEWAY_CACHED_TRANSIT_ADMISSION=ON",
+                     "-DGATEWAY_PICO_UART_BAUD_RATE=1000000"):
             self.assertIn(flag, configure)
         normal = build.build_cfg_from_args(mock.Mock(), build.make_parser().parse_args(["build", "--release"]))
         self.assertEqual(normal.packet_store, "heap")
