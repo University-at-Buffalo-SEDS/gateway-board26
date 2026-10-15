@@ -17,8 +17,11 @@ static uint32_t live_allocations;
  * slots are carved from the existing pool, not additional static RAM. */
 #define LARGE_SLOT_BYTES 4096U
 #define LARGE_SLOT_COUNT 4U
+#ifndef RESERVE_BLOCK_BYTES
 #define RESERVE_BLOCK_BYTES 256U
+#endif
 #define RESERVE_BLOCK_COUNT 64U
+#define LARGE_RESERVE_BYTES (RESERVE_BLOCK_BYTES * RESERVE_BLOCK_COUNT)
 static uint8_t *large_slots;
 static uint64_t reserve_used;
 static uint8_t reserve_lengths[RESERVE_BLOCK_COUNT];
@@ -77,7 +80,7 @@ static void *large_slot_allocate(size_t size)
 static int large_slot_index(void *ptr)
 {
     const uintptr_t address = (uintptr_t)ptr, start = (uintptr_t)large_slots;
-    if (!large_slots || address < start || address >= start + LARGE_SLOT_COUNT * LARGE_SLOT_BYTES)
+    if (!large_slots || address < start || address >= start + LARGE_RESERVE_BYTES)
         return -1;
     return (address - start) / RESERVE_BLOCK_BYTES;
 }
@@ -121,7 +124,7 @@ static void snapshot(void)
     for (unsigned i = 0; i < region_count; ++i)
         tlsf_walk_pool(regions[i], snapshot_block, NULL);
     if (large_slots) {
-        g_telemetry_tlsf_free_bytes += LARGE_SLOT_COUNT * LARGE_SLOT_BYTES - reserve_live_bytes;
+        g_telemetry_tlsf_free_bytes += LARGE_RESERVE_BYTES - reserve_live_bytes;
         unsigned run = 0;
         for (unsigned i = 0; i < RESERVE_BLOCK_COUNT; ++i) {
             if (reserve_used & (UINT64_C(1) << i)) run = 0;
@@ -164,11 +167,11 @@ static int initialize(void)
         regions[region_count++] = region;
         g_telemetry_tlsf_region_bytes += bytes;
     }
-    large_slots = tlsf_memalign(allocator, 8U, LARGE_SLOT_COUNT * LARGE_SLOT_BYTES);
+    large_slots = tlsf_memalign(allocator, 8U, LARGE_RESERVE_BYTES);
     if (!large_slots) goto fail;
     /* Reserve ownership overhead/padding conservatively in admission accounting. */
     g_telemetry_tlsf_region_bytes -= tlsf_block_size(large_slots) -
-        LARGE_SLOT_COUNT * LARGE_SLOT_BYTES + 2U * sizeof(void *);
+        LARGE_RESERVE_BYTES + 2U * sizeof(void *);
     g_telemetry_tlsf_active = 1;
     snapshot();
     return 1;

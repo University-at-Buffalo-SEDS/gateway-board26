@@ -107,12 +107,13 @@ int main(void) {
     assert(frames == 32 && pending == 0 && network_pending == 0 && handoff_drops == 0);
     reset(1);
     if (!setjmp(completed)) telemetry_thread_entry(0);
-    // A continuously replenished ring still services network and yields.
-    assert(network_calls == 10 && frames == 40 && handoff_drops == 0 && network_pending == 0);
+    // A continuously replenished ring services each handoff once and yields;
+    // do not repeat discovery maintenance after the bounded combined pass.
+    assert(network_calls == 5 && frames == 40 && handoff_drops == 0 && network_pending == 0);
     assert(first_network_pending == 40);
     ticks=UINT32_MAX-3; network_calls=cycles=frames=0;
     if (!setjmp(completed)) telemetry_thread_entry(0);
-    assert(network_calls == 10 && frames == 40 && handoff_drops == 0 && network_pending == 0);
+    assert(network_calls == 5 && frames == 40 && handoff_drops == 0 && network_pending == 0);
 }
 '''
         with tempfile.TemporaryDirectory() as tmp:
