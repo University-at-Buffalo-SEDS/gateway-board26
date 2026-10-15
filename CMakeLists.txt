@@ -97,10 +97,15 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
 # Add project symbols (macros)
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined symbols
-    CAN_BUS_RX_RING_DEPTH=48
+    CAN_BUS_RX_RING_DEPTH=192
     CAN_BUS_REASM_SLOTS=3
     CAN_BUS_REASM_MAX_BYTES=128
 )
+
+option(GATEWAY_CACHED_TRANSIT_ADMISSION "Experimental cached-transit scratch admission (requires integrated qualification)" OFF)
+if(GATEWAY_CACHED_TRANSIT_ADMISSION)
+    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE GATEWAY_CACHED_TRANSIT_ADMISSION=1)
+endif()
 
 set(GATEWAY_SEDSNET_EMERGENCY_POOL_SIZE "16384" CACHE STRING
     "Dedicated SEDSNet large-allocation pool isolated from small-object churn" FORCE)
@@ -119,17 +124,19 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
 
 # SEDSNet v4
 set(SEDSNET_DEVICE_IDENTIFIER "GB" CACHE STRING "" FORCE)
-set(SEDSNET_MAX_STACK_PAYLOAD "128" CACHE STRING "" FORCE)
+# Small local reports fit inline; transit frames already use owned packed
+# storage. Avoid inflating every queued union with an unused 128-byte payload.
+set(SEDSNET_MAX_STACK_PAYLOAD "32" CACHE STRING "" FORCE)
 # Two link bootstrap schemas plus retained topology must fit together.
 # This is a queue ceiling, not a static allocation; allocator diagnostics
 # remain the hardware check for transient schema decode/merge allocations.
 set(SEDSNET_MAX_QUEUE_BUDGET "16384" CACHE STRING
     "Bound SEDSNet queues below the Gateway shared ThreadX pool reserve" FORCE)
 set(SEDSNET_MAX_RECENT_RX_IDS "16" CACHE STRING "" FORCE)
-set(SEDSNET_ENV_STARTING_QUEUE_SIZE "1024" CACHE STRING
+set(SEDSNET_ENV_STARTING_QUEUE_SIZE "2048" CACHE STRING
     "Preallocate useful fixed-capacity Gateway queues while memory is contiguous" FORCE)
 set(SEDSNET_ENV_QUEUE_GROW_STEP "1.0" CACHE STRING
-    "Use fixed-capacity queues to prevent ThreadX byte-pool fragmentation" FORCE)
+    "Use fixed-capacity queues to prevent allocator fragmentation" FORCE)
 set(SEDSNET_ENV_PAYLOAD_COMPRESS_THRESHOLD "30" CACHE STRING "" FORCE)
 set(SEDSNET_TARGET "thumbv7em-none-eabihf" CACHE STRING "" FORCE)
 set(SEDSNET_ENV_RUSTFLAGS "-Ctarget-cpu=cortex-m4" CACHE STRING

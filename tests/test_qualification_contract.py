@@ -31,7 +31,7 @@ class QualificationContractTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         ioc = (root / "gateway_board.ioc").read_text(encoding="utf-8")
         self.assertIn("TELEMETRY_THREAD_STACK_SIZE (13U * 1024U)", thread)
-        self.assertIn("TX_APP_MEM_POOL_SIZE                     75776", config)
+        self.assertIn("TX_APP_MEM_POOL_SIZE                     65408", config)
         self.assertIn("TX_APP_MEM_POOL_SIZE=73728", ioc)
         self.assertIn("UX_DEVICE_APP_MEM_POOL_SIZE=20904", ioc)
 
@@ -59,7 +59,8 @@ class QualificationContractTests(unittest.TestCase):
         self.assertIn("#define TELEMETRY_UART_QUEUE_DEPTH (TELEMETRY_UART_SMALL_DEPTH + TELEMETRY_UART_LARGE_DEPTH)", uart_c)
         self.assertIn("#define TELEMETRY_UART_RX_RING_DEPTH 8U", uart_c)
         self.assertNotIn("HAL_UART_Receive_IT", uart_c)
-        self.assertIn("READ_REG(g_telemetry_uart.huart->Instance->RDR)", uart_c)
+        self.assertNotIn("READ_REG(g_telemetry_uart.huart->Instance->RDR)", uart_c)
+        self.assertIn("HAL_UARTEx_ReceiveToIdle_DMA", uart_c)
         self.assertNotIn("UART_RXDATA_FLUSH_REQUEST", uart_c)
         self.assertIn("can_bus_recover_if_bus_off", can)
         self.assertIn("can_tx_queue_submit", can)
@@ -125,7 +126,7 @@ class QualificationContractTests(unittest.TestCase):
         self.assertNotIn("< (uint32_t)frag_cnt", can_bus)
         self.assertIn("BOARD_CAN_MAX_FRAME_BYTES 128U", telemetry)
         self.assertIn('SEDSNET_MAX_QUEUE_BUDGET "16384"', cmake)
-        self.assertIn('SEDSNET_ENV_STARTING_QUEUE_SIZE "1024"', cmake)
+        self.assertIn('SEDSNET_ENV_STARTING_QUEUE_SIZE "2048"', cmake)
         self.assertIn('SEDSNET_ENV_QUEUE_GROW_STEP "1.0"', cmake)
 
     def test_physical_bridge_preserves_the_packed_wire_image(self):
@@ -136,7 +137,7 @@ class QualificationContractTests(unittest.TestCase):
 
         uart_ingress = telemetry.index("void telemetry_uart_handle_data")
         uart_ingest = telemetry.index(
-            "seds_router_receive_packed_from_side(", uart_ingress
+            "seds_router_rx_packed_packet_to_queue_from_side(", uart_ingress
         )
         self.assertGreater(uart_ingest, uart_ingress)
 
@@ -169,9 +170,12 @@ class QualificationContractTests(unittest.TestCase):
         thread = (root / "Core" / "Src" / "telemetry_thread.c").read_text(
             encoding="utf-8"
         )
-        self.assertIn("is_sedsnet_side_transport", uart)
-        self.assertIn("payload[0] == (uint8_t)'S'", uart)
-        self.assertIn("is_sedsnet_side_transport == 0U", uart)
+        start = uart.index("static void telemetry_uart_dispatch_data_payload(const uint8_t *payload, size_t payload_len) {")
+        body = uart[start:uart.index("\nstatic void ", start + 1)]
+        self.assertNotIn("seds_pkt_validate_packed", body)
+        self.assertIn("telemetry_uart_dispatch_frame", body)
+        telemetry = (root / "Core" / "Src" / "telemetry.c").read_text(encoding="utf-8")
+        self.assertIn("seds_router_rx_packed_packet_to_queue_from_side", telemetry)
 
 
     def test_periodic_health_check_does_not_serialize_topology(self):

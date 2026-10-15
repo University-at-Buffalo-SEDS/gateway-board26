@@ -8,7 +8,6 @@
 volatile uint32_t g_gateway_crc_hw_state; /* 0 untested, 1 ready, 2 fallback */
 volatile uint32_t g_gateway_crc_hw_calls;
 
-#if !defined(SEDS_FIRMWARE_SIM_TEST)
 #ifndef GATEWAY_CRC_TEST
 static uint32_t gateway_crc_hw_update(uint32_t state, const uint8_t *bytes, size_t len)
 {
@@ -55,12 +54,3 @@ int32_t gateway_crc32_update(uint32_t state, const uint8_t *bytes, size_t len,
     __set_PRIMASK(mask);
     return ok;
 }
-#else
-int32_t gateway_crc32_update(uint32_t state, const uint8_t *bytes, size_t len,
-                            uint32_t *result)
-{
-    (void)state; (void)bytes; (void)len; (void)result;
-    g_gateway_crc_hw_state = 2U;
-    return 0; /* Simulator uses the software reference. */
-}
-#endif

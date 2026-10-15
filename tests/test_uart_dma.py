@@ -92,4 +92,52 @@ int main(void){
    for flags in [[], ['-DSEDS_FIRMWARE_SIM_TEST=1']]:
     subprocess.run(['cc','-std=c11','-Wall','-Wextra','-Werror',*flags,str(p/'test.c'),'-o',str(p/'test')],check=True)
     subprocess.run([str(p/'test')],check=True)
+ def test_dma_start_uses_hal_and_reports_real_failures_in_both_builds(self):
+  source=(ROOT/'Core/Src/telemetry_uart.c').read_text()
+  start=source.index('static HAL_StatusTypeDef telemetry_uart_start_rx_dma(void) {')
+  end=source.index('\nstatic void ',start+1)
+  body=source[start:end]
+  code=r'''#include <stdint.h>
+#include <stddef.h>
+#include <assert.h>
+#define HAL_OK 0
+#define HAL_BUSY 1
+#define HAL_ERROR 2
+#define UART_CLEAR_PEF 1
+#define UART_CLEAR_FEF 2
+#define UART_CLEAR_NEF 4
+#define UART_CLEAR_OREF 8
+#define UART_CLEAR_IDLEF 16
+#define DMA_IT_HT 1
+#define TELEMETRY_UART_RX_DMA_BUF_SIZE 512
+#define __HAL_UART_CLEAR_FLAG(u,f) ((void)(u),(void)(f))
+#define __HAL_DMA_DISABLE_IT(d,f) ((void)(d),(void)(f),++disabled)
+typedef int HAL_StatusTypeDef;
+typedef struct {void *hdmarx;uint32_t ErrorCode;} UART_HandleTypeDef;
+static struct { UART_HandleTypeDef *huart;uint8_t rx_dma_buf[512];unsigned rx_dma_active,rx_dma_start_ok_count,rx_dma_start_busy_count,rx_dma_start_error_count,rx_dma_last_error_code;} g_telemetry_uart;
+static unsigned calls,disabled;
+static int result;
+#ifdef SEDS_FIRMWARE_SIM_TEST
+static unsigned g_sim_uart_rx_start_fail,g_sim_uart_rx_start_ok;
+#endif
+static int HAL_UARTEx_ReceiveToIdle_DMA(UART_HandleTypeDef *u,uint8_t *p,unsigned n){assert(u==g_telemetry_uart.huart && p==g_telemetry_uart.rx_dma_buf && n==512);calls++;return result;}
+'''+body+r'''
+int main(void){
+ assert(telemetry_uart_start_rx_dma()==HAL_ERROR && calls==0);
+ UART_HandleTypeDef u={(void*)1,7};g_telemetry_uart.huart=&u;
+ assert(telemetry_uart_start_rx_dma()==HAL_OK && calls==1 && disabled==1 && g_telemetry_uart.rx_dma_active);
+ result=HAL_BUSY;assert(telemetry_uart_start_rx_dma()==HAL_BUSY && calls==2 && !g_telemetry_uart.rx_dma_active);
+ assert(g_telemetry_uart.rx_dma_start_busy_count==1);
+ result=HAL_ERROR;assert(telemetry_uart_start_rx_dma()==HAL_ERROR && calls==3 && !g_telemetry_uart.rx_dma_active);
+ assert(g_telemetry_uart.rx_dma_start_error_count==1 && g_telemetry_uart.rx_dma_last_error_code==7);
+#ifdef SEDS_FIRMWARE_SIM_TEST
+ assert(g_sim_uart_rx_start_ok==1 && g_sim_uart_rx_start_fail==1);
+#endif
+}
+'''
+  with tempfile.TemporaryDirectory() as d:
+   p=Path(d);(p/'start.c').write_text(code)
+   for flags in [[],['-DSEDS_FIRMWARE_SIM_TEST=1']]:
+    subprocess.run(['cc','-std=c11','-Wall','-Wextra','-Werror',*flags,str(p/'start.c'),'-o',str(p/'test')],check=True)
+    subprocess.run([str(p/'test')],check=True)
 if __name__=='__main__':unittest.main()

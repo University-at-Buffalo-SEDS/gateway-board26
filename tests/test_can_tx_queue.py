@@ -40,10 +40,11 @@ uint32_t HAL_GetTick(void){return tick;}
 void *telemetry_can_tx_allocate(size_t n){assert(!irq);if(failed_alloc)return NULL;allocations++;return malloc(n);}
 void telemetryFree(void *p){assert(!irq);frees++;free(p);}
 HAL_StatusTypeDef can_bus_send_bytes(const uint8_t *p,size_t n,uint32_t id){
- assert(irq && n==64);
+ assert(irq && n>=9 && n<=64);
+ assert(p[5]==1 ? n==(size_t)(9+p[7]+((unsigned)p[8]<<8)) : n==64);
  if(hal_error)return HAL_ERROR;
  if(!free_slots)return HAL_BUSY;
- free_slots--;assert(count<4096);memcpy(wire[count],p,64);ids[count++]=id;return HAL_OK;
+ free_slots--;assert(count<4096);memset(wire[count],0,64);memcpy(wire[count],p,n);ids[count++]=id;return HAL_OK;
 }
 static void interrupt(void){unsigned a=allocations,f=frees;irq=1;can_tx_queue_pump();assert(irq && allocations==a && frees==f);irq=0;}
 static void drain(void){while(g_can_tx_pending){free_slots=3;interrupt();can_tx_queue_service();}}

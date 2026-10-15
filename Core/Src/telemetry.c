@@ -156,6 +156,17 @@ volatile uint32_t g_sim_uart_valve_command_count = 0U;
 volatile uint32_t g_sim_can_valve_command_tx_count = 0U;
 volatile uint32_t g_sim_uart_router_receive_fail = 0U;
 volatile int32_t g_sim_uart_router_last_result = 0;
+#ifdef SEDS_FIRMWARE_SIM_TEST
+volatile uint32_t g_sim_uart_admission_fail;
+volatile uint32_t g_sim_uart_valve_admission_fail;
+volatile uint32_t g_sim_uart_admission_last_type;
+volatile uint32_t g_sim_uart_valve_admission_free;
+volatile uint32_t g_sim_uart_valve_admission_additional;
+volatile uint32_t g_sim_uart_valve_admission_largest;
+volatile uint32_t g_sim_uart_valve_admission_reason;
+volatile uint32_t g_sim_uart_valve_admission_reserve_low;
+volatile uint32_t g_sim_uart_valve_admission_reserve_high;
+#endif
 volatile uint32_t g_sim_gateway_pilot_open_status = 0U;
 
 static void telemetry_signal_deserialize_failure(void) {
@@ -235,17 +246,38 @@ void telemetry_uart_handle_data(const uint8_t *payload, size_t len) {
     return;
   }
 
+  /* Decode the side envelope and copy into prioritized network RX storage.
+   * Routing a complete schema/command here can exceed the UART byte budget
+   * and leave CAN undrained for an entire expensive network operation. */
   const size_t rejected_before = seds_memory_admission_rejected();
   telemetry_lock();
   if (telemetry_uart_side_id() >= 0) {
-    result = seds_router_receive_packed_from_side(
+    result = seds_router_rx_packed_packet_to_queue_from_side(
         g_router.r, (uint32_t)telemetry_uart_side_id(), payload, len);
   } else {
-    result = seds_router_receive_packed(g_router.r, payload, len);
+    result = seds_router_rx_packed_packet_to_queue(g_router.r, payload, len);
   }
   telemetry_unlock();
 
-  if (result != SEDS_OK && seds_memory_admission_rejected() != rejected_before) return;
+  if (result != SEDS_OK && seds_memory_admission_rejected() != rejected_before) {
+#ifdef SEDS_FIRMWARE_SIM_TEST
+    ++g_sim_uart_admission_fail;
+    g_sim_uart_admission_last_type = g_sim_uart_last_data_type;
+    if (g_sim_uart_last_data_type == (uint32_t)SEDS_DT_VALVE_COMMAND) {
+      ++g_sim_uart_valve_admission_fail;
+#ifdef TELEMETRY_USE_TLSF
+      g_sim_uart_valve_admission_free = g_gateway_admission_last_free;
+      g_sim_uart_valve_admission_additional = g_gateway_admission_last_additional;
+      g_sim_uart_valve_admission_largest = g_gateway_admission_last_largest;
+      g_sim_uart_valve_admission_reason = g_gateway_admission_last_reason;
+      const uint64_t reserve = telemetry_tlsf_reserve_mask();
+      g_sim_uart_valve_admission_reserve_low = (uint32_t)reserve;
+      g_sim_uart_valve_admission_reserve_high = (uint32_t)(reserve >> 32U);
+#endif
+    }
+#endif
+    return;
+  }
   if (result != SEDS_OK) {
     telemetry_uart_note_deserialize_result(0U);
     (void)log_error_asynchronous("UART enqueue failed: %d len=%u\r\n", (int)result,
@@ -472,7 +504,8 @@ static uint64_t node_now_since_ms(void *user) {
   (void)user;
   const RouterState s = g_router;
   const uint64_t now = tx_raw_now_ms_locked();
-  return s.r ? (now - s.start_time) : 0ULL;
+  /* Construction and initial maintenance also need an advancing clock. */
+  return now - s.start_time;
 }
 
 static SedsResult tx_send_with_priority(const uint8_t *bytes, size_t len,
@@ -580,8 +613,31 @@ static void telemetry_board_link_rx(const uint8_t *data, size_t len, void *user)
 }
 #endif
 
+#ifdef TELEMETRY_USE_TLSF
+volatile uint32_t g_gateway_cached_checks;
+volatile uint32_t g_gateway_cached_denied;
+static UNUSED_FUNCTION bool gateway_admission_probe(size_t additional, size_t largest, uint32_t work) {
+  if (work == SEDS_MEMORY_WORK_CACHED_TRANSIT) {
+    ++g_gateway_cached_checks;
+    const bool allowed = telemetry_tlsf_admit_cached_transit(additional, largest);
+    if (!allowed) ++g_gateway_cached_denied;
+    return allowed;
+  }
+  return telemetry_tlsf_admit(additional, largest);
+}
+#endif
+
 volatile uint32_t g_gateway_can_rx_handoff_fail;
 volatile int32_t g_gateway_can_rx_handoff_last;
+volatile uint32_t g_gateway_can_admission_fail;
+volatile uint32_t g_gateway_can_queue_fail;
+volatile uint32_t g_gateway_can_rejected_free;
+volatile uint32_t g_gateway_can_rejected_additional;
+volatile uint32_t g_gateway_can_rejected_largest;
+volatile uint32_t g_gateway_can_rejected_word0;
+volatile uint32_t g_gateway_can_rejected_word1;
+volatile uint32_t g_gateway_can_rejected_word2;
+volatile uint32_t g_gateway_can_rejected_word3;
 volatile uint32_t g_gateway_queue_service_fail;
 volatile int32_t g_gateway_queue_service_last;
 
@@ -601,6 +657,8 @@ void rx_asynchronous(const uint8_t *bytes, size_t len) {
     return;
   }
 
+  const size_t admission_before = seds_memory_admission_rejected();
+
   /* Foreground reassembly hands ownership to the bounded network RX queue.
    * Do not route/dispatch each CAN packet while the hardware ring waits.
    * Side transport decoding still happens here so template-dependent frames
@@ -617,6 +675,24 @@ void rx_asynchronous(const uint8_t *bytes, size_t len) {
 
   if (result != SEDS_OK) {
     ++g_gateway_can_rx_handoff_fail;
+    if (seds_memory_admission_rejected() != admission_before) {
+      ++g_gateway_can_admission_fail;
+      /* Capture a bounded header sample; no allocation or decoding in the
+       * handoff. Values are read-only debugger/simulator diagnostics. */
+      uint32_t words[4] = {0};
+      memcpy(words, bytes, len < sizeof(words) ? len : sizeof(words));
+      g_gateway_can_rejected_word0 = words[0];
+      g_gateway_can_rejected_word1 = words[1];
+      g_gateway_can_rejected_word2 = words[2];
+      g_gateway_can_rejected_word3 = words[3];
+#ifdef TELEMETRY_USE_TLSF
+      g_gateway_can_rejected_free = g_gateway_admission_last_free;
+      g_gateway_can_rejected_additional = g_gateway_admission_last_additional;
+      g_gateway_can_rejected_largest = g_gateway_admission_last_largest;
+#endif
+    } else {
+      ++g_gateway_can_queue_fail;
+    }
     g_gateway_can_rx_handoff_last = result;
     telemetry_signal_deserialize_failure();
   } else {
@@ -785,7 +861,11 @@ static SedsResult init_telemetry_router_locked(void) {
    * forwards it back to its ingress side. Endpoint reachability is learned by
    * discovery; the gateway must not advertise remote endpoints as local. */
 #ifdef TELEMETRY_USE_TLSF
+#ifdef GATEWAY_CACHED_TRANSIT_ADMISSION
+  seds_set_memory_admission_probe_v2(gateway_admission_probe);
+#else
   seds_set_memory_admission_probe(telemetry_tlsf_admit);
+#endif
 #endif
 #ifdef SEDS_ENABLE_COMPACT_PACKET_STORE
   (void)board_packet_store_init();
@@ -794,6 +874,8 @@ static SedsResult init_telemetry_router_locked(void) {
     return SEDS_IO;
   }
 #endif
+  /* Keep one clock origin through construction and initial queue service. */
+  g_router.start_time = tx_raw_now_ms_locked();
   r = seds_router_new(node_now_since_ms, NULL, NULL, 0U);
   if (!r) {
     printf("Error: failed to create router\r\n");
@@ -893,7 +975,6 @@ static SedsResult init_telemetry_router_locked(void) {
   g_discovery_schema_announced = 0U;
   g_discovery_schema_requested = 0U;
   g_discovery_schema_retry_ms = 0ULL;
-  g_router.start_time = tx_raw_now_ms_locked();
   return SEDS_OK;
 #endif
 }
@@ -1062,7 +1143,7 @@ SedsResult process_all_queues_timeout(uint32_t timeout_ms) {
 
   telemetry_lock();
   const SedsResult result =
-      seds_router_process_all_queues_with_timeout(g_router.r, timeout_ms);
+      seds_router_drain_queues_with_timeout(g_router.r, timeout_ms);
   telemetry_unlock();
   if (result != SEDS_OK) {
     ++g_gateway_queue_service_fail;

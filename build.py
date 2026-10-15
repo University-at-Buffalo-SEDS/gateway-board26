@@ -885,7 +885,7 @@ def build_cfg_from_args(ui: UI, args: argparse.Namespace) -> BuildConfig:
         watchdog=args.watchdog,
         packet_store=args.packet_store,
         pico_baud=args.pico_baud,
-        sedsnet_ref=args.sedsnet_ref or ("dev" if args.packet_store == "compact" else "main"),
+        sedsnet_ref=args.sedsnet_ref or "main",
         allocator=args.allocator,
         generator=args.generator,
         toolchain_file=toolchain,

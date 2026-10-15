@@ -28,6 +28,19 @@ def docker_run_prefix(docker: str) -> list[str]:
     return command
 
 
+def command_progress_end_sample(start: int, count: int, restarts: set[int]) -> int:
+    """Allow the documented discovery+ACK window after a host restart.
+
+    Reboots use one-based completed sample counts; probes use zero-based indexes.
+    The host intentionally waits for named discovery before sending a command.
+    Per-command ACK latency and every scheduled command remain checked separately.
+    """
+    if count < 2 or not 0 <= start < count - 1:
+        raise ValueError("command progress requires two existing samples")
+    end = start + (2 if start + 1 in restarts else 1)
+    return min(end, count - 1)
+
+
 def run_live(command: list[str], label: str) -> None:
     """Run a quiet simulator command with visible liveness updates."""
     print(f"[SIM] {label} started", flush=True)
@@ -457,6 +470,8 @@ def run_network_simulation(
     # reboot, so post-restart stalls cannot hide behind pre-reboot traffic.
     reboot_after_sample = (sample_count * 2) // 3
     service_restart_after_sample = sample_count // 3
+    command_restart_samples = ({service_restart_after_sample, reboot_after_sample}
+                               if perform_reboots else set())
     soak_command_samples = [
         sample for sample in range(1, sample_count)
         # RF CAN acknowledgement is deliberately disabled after sample 3 and
@@ -465,9 +480,10 @@ def run_network_simulation(
     ]
     topology = {
         "name": "complete-seds-avionics-and-fill-network",
-        # One millisecond is below the firmware service cadence while avoiding
-        # the 10x synchronization overhead of a 100 us multi-machine quantum.
-        "quantum_seconds": 0.001,
+        # Synchronize within the CAN FIFO receive window at this bus rate.
+        # A 1 ms quantum can deliver more than the three-slot hardware FIFO
+        # holds before the receiving CPU advances. Preserve finite FIFO loss.
+        "quantum_seconds": 0.0001,
         # The linked test proves connectivity; each board's separate profile
         # stage performs the long-duration allocator qualification.
         # The Pico-Fi/radio path deliberately models constrained serial links.
@@ -516,6 +532,7 @@ def run_network_simulation(
                     "GS_RADIO_DIAGNOSTICS": "1",
                     "RUST_LOG": "info",
                     "GS_SIMULATED_SERIAL_PTY": "1",
+                    "GS_VIDEO_MANAGED": "0",
                     "GS_LAYOUT_PATH": "/opt/groundstation/backend/layout/layout_hitl.json",
                     "GS_AV_BAY_UNDERGLOW_DEFAULT": "1",
                     "GS_FLIGHT_STATE_DEFAULT": "1",
@@ -582,6 +599,12 @@ def run_network_simulation(
         # on each local CAN segment plus traffic in both directions across the
         # RF/GroundStation/Pico-Fi/Gateway route.
         "assertions": [
+            *[
+                {"name": f"Gateway forwarding task progressed during interval {sample + 1}",
+                 "node": "gateway", "probe": "telemetry_loop_completions",
+                 "minimum_gain": 1, "from_sample": sample, "to_sample": sample + 1}
+                for sample in range(1, sample_count - 1)
+            ],
             {"name": "Gateway received GroundStation valve command", "node": "gateway", "probe": "uart_valve_command_count", "minimum": 1},
             {"name": "Gateway routed valve command onto CAN", "node": "gateway", "probe": "can_valve_command_tx_count", "minimum": 1},
             {"name": "GroundStation valve command reached board", "node": "valve", "probe": "valve_commands_received", "minimum": 1},
@@ -688,7 +711,8 @@ def run_network_simulation(
                         "probe": "valve_commands_executed",
                         "minimum_gain": 1,
                         "from_sample": sample,
-                        "to_sample": sample + 1,
+                        "to_sample": command_progress_end_sample(
+                            sample, sample_count, command_restart_samples),
                     }
                     for sample in (value - 1 for value in soak_command_samples)
                 ]
@@ -763,9 +787,9 @@ def run_network_simulation(
                  "contains": f"full-bay fill telemetry reached GroundStation from {node}"}
                 for node in ("GB", "AB", "VB", "DAQ")
             ],
-            {"name": "GroundStation received the DAQ raw 50 Hz loadcell stream",
+            {"name": "GroundStation received the DAQ raw 250 Hz loadcell stream",
              "node": "groundstation",
-             "contains": "full-bay DAQ raw loadcell 50 Hz stream reached GroundStation"},
+             "contains": "full-bay DAQ raw loadcell 250 Hz stream reached GroundStation"},
         ],
     }
 

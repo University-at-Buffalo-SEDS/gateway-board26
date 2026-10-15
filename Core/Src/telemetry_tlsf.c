@@ -16,25 +16,43 @@ static uint32_t live_allocations;
 /* Keep decode-sized blocks out of the small-packet allocation stream. These
  * slots are carved from the existing pool, not additional static RAM. */
 #define LARGE_SLOT_BYTES 4096U
-#define LARGE_SLOT_COUNT 2U
+#define LARGE_SLOT_COUNT 4U
 #define RESERVE_BLOCK_BYTES 256U
-#define RESERVE_BLOCK_COUNT 32U
+#define RESERVE_BLOCK_COUNT 64U
 static uint8_t *large_slots;
-static uint32_t reserve_used;
+static uint64_t reserve_used;
 static uint8_t reserve_lengths[RESERVE_BLOCK_COUNT];
 static uint32_t reserve_live_bytes;
 volatile uint32_t g_gateway_large_slot_live;
 volatile uint32_t g_gateway_large_slot_peak;
 volatile uint32_t g_gateway_admission_last_additional;
 volatile uint32_t g_gateway_admission_last_largest;
+volatile uint32_t g_gateway_admission_last_free;
+#ifdef SEDS_FIRMWARE_SIM_TEST
+volatile uint32_t g_gateway_admission_last_reason;
+uint64_t telemetry_tlsf_reserve_mask(void) {
+    const uint32_t saved = __get_PRIMASK();
+    __disable_irq();
+    const uint64_t mask = reserve_used;
+    __set_PRIMASK(saved);
+    return mask;
+}
+#endif
 
-/* A fixed bitmap avoids heap headers and bounds each search to 32 blocks.
+/* A fixed bitmap avoids heap headers and bounds each search to 64 blocks.
  * Only the allocation start records its length; pointers never move. */
-static int reserve_find_in(size_t size, uint32_t used)
+static int reserve_find_in(size_t size, uint64_t used)
 {
     if (!large_slots || size == 0U || size > RESERVE_BLOCK_BYTES * RESERVE_BLOCK_COUNT) return -1;
     const unsigned blocks = (size + RESERVE_BLOCK_BYTES - 1U) / RESERVE_BLOCK_BYTES;
-    const uint32_t bits = UINT32_MAX >> (RESERVE_BLOCK_COUNT - blocks);
+    if (blocks == 1U) {
+        const uint64_t free = ~used;
+        const uint32_t low = (uint32_t)free, high = (uint32_t)(free >> 32U);
+        if (low) return (int)__builtin_ctz(low);
+        if (high) return 32 + (int)__builtin_ctz(high);
+        return -1;
+    }
+    const uint64_t bits = UINT64_MAX >> (RESERVE_BLOCK_COUNT - blocks);
     for (unsigned i = 0; i + blocks <= RESERVE_BLOCK_COUNT; ++i)
         if ((used & (bits << i)) == 0U) return (int)i;
     return -1;
@@ -48,7 +66,7 @@ static void *large_slot_allocate(size_t size)
     const int index = reserve_find(size);
     if (index < 0) return NULL;
     const unsigned blocks = (size + RESERVE_BLOCK_BYTES - 1U) / RESERVE_BLOCK_BYTES;
-    reserve_used |= (UINT32_MAX >> (RESERVE_BLOCK_COUNT - blocks)) << (unsigned)index;
+    reserve_used |= (UINT64_MAX >> (RESERVE_BLOCK_COUNT - blocks)) << (unsigned)index;
     reserve_lengths[index] = blocks;
     reserve_live_bytes += blocks * RESERVE_BLOCK_BYTES;
     ++g_gateway_large_slot_live;
@@ -106,7 +124,7 @@ static void snapshot(void)
         g_telemetry_tlsf_free_bytes += LARGE_SLOT_COUNT * LARGE_SLOT_BYTES - reserve_live_bytes;
         unsigned run = 0;
         for (unsigned i = 0; i < RESERVE_BLOCK_COUNT; ++i) {
-            if (reserve_used & (1UL << i)) run = 0;
+            if (reserve_used & (UINT64_C(1) << i)) run = 0;
             else {
                 if (run == 0U) ++g_telemetry_tlsf_free_blocks;
                 ++run;
@@ -165,7 +183,10 @@ void *telemetry_tlsf_malloc(size_t size)
     void *ptr = NULL;
     if (initialize() && size <= tlsf_block_size_max() - 64U) {
         /* Startup topology/replay buffers should not occupy the reserve. */
-        ptr = tlsf_memalign(allocator, 8U, size ? size : 1U);
+        /* Rust reserves its own alignment/header in telemetryMalloc's raw
+         * allocation. CAN callers own byte storage. Extra memalign padding
+         * strands small free blocks even for a ten-byte request. */
+        ptr = tlsf_malloc(allocator, size ? size : 1U);
         if (!ptr) ptr = large_slot_allocate(size);
     }
     if (ptr) {
@@ -192,7 +213,7 @@ void telemetry_tlsf_free(void *ptr)
     const int slot = large_slot_index(ptr);
     if (slot >= 0) {
         const unsigned blocks = reserve_lengths[slot];
-        reserve_used &= ~((UINT32_MAX >> (RESERVE_BLOCK_COUNT - blocks)) << (unsigned)slot);
+        reserve_used &= ~((UINT64_MAX >> (RESERVE_BLOCK_COUNT - blocks)) << (unsigned)slot);
         reserve_lengths[slot] = 0U;
         --g_gateway_large_slot_live;
         reserve_live_bytes -= blocks * RESERVE_BLOCK_BYTES;
@@ -217,25 +238,34 @@ void telemetry_tlsf_sample(void)
  * actual aligned scratch allocation uses TLSF's bitmap lookup and bounded
  * split/coalesce operations; walking every heap block here delayed CAN RX.
  * The probe is released before returning and cannot recurse into this hook. */
-bool telemetry_tlsf_admit(size_t additional, size_t largest)
+static bool admit_impl(size_t additional, size_t largest, bool cached_transit)
 {
     const uint32_t saved = __get_PRIMASK();
     __disable_irq();
     bool allowed = initialize() != 0;
+#ifdef SEDS_FIRMWARE_SIM_TEST
+    uint32_t reason = 1U;
+#endif
     const size_t reserve = additional <= 512U ? 512U : 4096U;
     /* Even a small wire ACK can allocate a larger owned queue/decoder object:
      * hardware captured a 676-byte request after a 160-byte scratch estimate.
      * Preserve the smaller ACK reserve, but admit its real working block. */
     if (additional < 1024U) additional = 1024U;
-    if (largest != 0U && largest < 1024U) largest = 1024U;
-    const size_t occupied = (size_t)g_telemetry_tlsf_live_bytes +
-        ((size_t)live_allocations + region_count) * 2U * sizeof(void *);
-    const size_t available = g_telemetry_tlsf_region_bytes > occupied ?
-        g_telemetry_tlsf_region_bytes - occupied : 0U;
+    if (!cached_transit && largest != 0U && largest < 1024U) largest = 1024U;
+    /* Count actual free blocks instead of charging two headers per live
+     * allocation. The former bound double-counted occupied metadata and
+     * stranded free space under sustained small-packet traffic. Include the
+     * separately reserved bitmap pool exactly once; keep the safety reserve
+     * and contiguous scratch preflight below. No heap walk runs on ingress. */
+    const size_t available = allowed ? tlsf_free_size(allocator) +
+        RESERVE_BLOCK_BYTES * RESERVE_BLOCK_COUNT - reserve_live_bytes : 0U;
     allowed = allowed && additional <= available && reserve <= available - additional;
     if (allowed && largest != 0U) {
         if (largest > tlsf_block_size_max() - 64U) {
             allowed = false;
+#ifdef SEDS_FIRMWARE_SIM_TEST
+            reason = 2U;
+#endif
         } else {
             /* A discovery snapshot clones many small strings, not just its
              * largest block. If TLSF cannot supply scratch, the fallback
@@ -247,37 +277,63 @@ bool telemetry_tlsf_admit(size_t additional, size_t largest)
                 largest <= reserve_free;
             const size_t padding = slot_available ?
                 ((largest + RESERVE_BLOCK_BYTES - 1U) / RESERVE_BLOCK_BYTES) * RESERVE_BLOCK_BYTES - largest : 0U;
-            if (tlsf_can_memalign(allocator, 8U, largest)) {
+            if (tlsf_can_memalign(allocator, tlsf_align_size(), largest)) {
                 allowed = true;
             } else {
                 allowed = slot_available && padding <= available - additional - reserve;
-                /* Fragmented ordinary blocks can still hold the small strings
-                 * in a discovery snapshot. Hold their budget and safety reserve while
-                 * testing, then release it, rather than rejecting discovery
-                 * forever just because its largest buffer needs fallback. */
+#ifdef SEDS_FIRMWARE_SIM_TEST
+                reason = slot_available ? 4U : 3U;
+#endif
+                /* Hold the work's small allocations while testing fragmented
+                 * storage, then verify the full safety reserve remains free.
+                 * No real reserve bitmap or allocation counters are changed. */
                 void *head = NULL;
-                uint32_t trial_used = reserve_used;
+                uint64_t trial_used = reserve_used;
                 const int index = reserve_find(largest);
                 if (allowed) {
                     const unsigned blocks = (largest + RESERVE_BLOCK_BYTES - 1U) / RESERVE_BLOCK_BYTES;
-                    trial_used |= (UINT32_MAX >> (RESERVE_BLOCK_COUNT - blocks)) << (unsigned)index;
+                    trial_used |= (UINT64_MAX >> (RESERVE_BLOCK_COUNT - blocks)) << (unsigned)index;
                 }
-                size_t remaining = (additional > largest ? additional - largest : 0U) + reserve;
+                /* Probe actual work only. The safety reserve must remain free;
+                 * materializing it as 128-byte objects rounds every 128 bytes
+                 * to a 256-byte fallback slot and double-charges headroom. */
+                size_t remaining = additional > largest ? additional - largest : 0U;
                 unsigned probes = 0U;
                 while (allowed && remaining != 0U && probes++ < 128U) {
                     const size_t chunk = remaining > 128U ? 128U : remaining;
-                    void *block = tlsf_memalign(allocator, 8U,
+                    void *block = tlsf_malloc(allocator,
                         chunk < sizeof(void *) ? sizeof(void *) : chunk);
-                    if (!block) break;
-                    *(void **)block = head;
-                    head = block;
+                    if (block) {
+                        *(void **)block = head;
+                        head = block;
+                    } else {
+                        /* The remainder consists of actual small objects,
+                         * not one large buffer. Charge each fallback block,
+                         * including its padding, in the private trial bitmap.
+                         * Keep the real bitmap and allocation counters intact. */
+                        const int small = reserve_find_in(chunk, trial_used);
+                        if (small < 0) {
+#ifdef SEDS_FIRMWARE_SIM_TEST
+                            reason = 5U;
+#endif
+                            allowed = false; break;
+                        }
+                        trial_used |= UINT64_C(1) << (unsigned)small;
+                    }
                     remaining -= chunk;
                 }
-                /* Remaining small objects/reserve may use the unused bitmap
-                 * pool too. Model that ownership without touching its contents
-                 * or publishing temporary allocation counters. */
-                if (remaining != 0U && reserve_find_in(remaining, trial_used) < 0)
-                    allowed = false;
+                if (remaining != 0U) allowed = false;
+                if (allowed) {
+                    const size_t trial_free = tlsf_free_size(allocator) +
+                        (RESERVE_BLOCK_COUNT - (unsigned)__builtin_popcountll(trial_used)) *
+                            RESERVE_BLOCK_BYTES;
+                    if (trial_free < reserve) {
+                        allowed = false;
+#ifdef SEDS_FIRMWARE_SIM_TEST
+                        reason = 6U;
+#endif
+                    }
+                }
                 while (head) {
                     void *next = *(void **)head;
                     tlsf_free(allocator, head);
@@ -287,10 +343,26 @@ bool telemetry_tlsf_admit(size_t additional, size_t largest)
         }
     }
     if (!allowed) {
+#ifdef SEDS_FIRMWARE_SIM_TEST
+        g_gateway_admission_last_reason = reason;
+#endif
         ++g_gateway_memory_admission_drops;
+        g_gateway_admission_last_free = available;
         g_gateway_admission_last_additional = additional;
         g_gateway_admission_last_largest = largest;
     }
     __set_PRIMASK(saved);
     return allowed;
+}
+
+/* Ordinary/cold decoder work retains the hardware-tested 1 KiB floor. */
+bool telemetry_tlsf_admit(size_t additional, size_t largest) {
+    return admit_impl(additional, largest, false);
+}
+bool telemetry_tlsf_admit_cached_transit(size_t additional, size_t largest) {
+    if (additional < 1024U || additional > 1280U || largest == 0U || largest > 256U)
+        return admit_impl(additional, largest, false);
+    /* The extended network probe verifies warmed metadata before supplying
+     * this bound. Keep the same 4 KiB free-space safety reserve. */
+    return admit_impl(additional, 256U, true);
 }

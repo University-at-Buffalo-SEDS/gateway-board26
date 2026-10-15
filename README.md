@@ -131,7 +131,8 @@ python3 build.py flash --release --allocator tlsf --packet-store compact \
   --pico-baud 1000000 --method stm32prog-cli
 ```
 
-`--packet-store compact` selects `dev` automatically. Both Pico UART ends must
+`--packet-store compact` uses `main` by default, as does heap storage.
+Use `--sedsnet-ref dev` only for an explicit development comparison. Both Pico UART ends must
 use the same baud; 1 Mbaud is the paired Pico build, independent of the 115200
 radio link. The board-owned watchdog is enabled by default; use its
 matching factory bootloader. `--packet-store heap` disables the arena.

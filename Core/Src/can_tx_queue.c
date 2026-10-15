@@ -80,7 +80,11 @@ void can_tx_queue_pump(void) {
         memcpy(frame + 9U, head->data + head->offset, take);
         /* HAL copies into message RAM synchronously, but never waits for wire
          * completion. BUSY/error retains this exact fragment for later service. */
-        if (can_bus_send_bytes(frame, sizeof(frame), head->id) != HAL_OK) break;
+        /* Single-fragment packets need no fixed reassembly stride. HAL
+         * rounds the used bytes to a legal DLC; retain 64-byte multi-frame
+         * packets for compatibility with existing receivers. */
+        const size_t used = count == 1U ? 9U + take : sizeof(frame);
+        if (can_bus_send_bytes(frame, used, head->id) != HAL_OK) break;
         head->offset += take;
         if (head->offset == head->len) {
             ++g_can_tx_submitted;

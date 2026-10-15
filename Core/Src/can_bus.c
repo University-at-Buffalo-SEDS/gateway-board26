@@ -45,11 +45,8 @@
 #endif
 
 #ifndef CAN_BUS_POLLING
-#ifdef SEDS_FIRMWARE_SIM_TEST
-#define CAN_BUS_POLLING 1
-#else
+/* Observability must retain the production interrupt-driven receive path. */
 #define CAN_BUS_POLLING 0
-#endif
 #endif
 
 
@@ -179,7 +176,7 @@ enum { CAN_BUS_FRAG_F_FIRST = 1u << 0, CAN_BUS_FRAG_F_LAST = 1u << 1 };
 #endif
 
 typedef struct {
-  uint32_t std_id; // 11-bit ID in lower bits (we only handle standard here)
+  uint16_t std_id; // standard 11-bit ID; ingress already masks to 0x7ff
   uint8_t len;     // payload bytes (0..64)
   uint8_t data[64];
 } can_bus_rx_frame_t;
@@ -245,6 +242,10 @@ failed:
 }
 
 static can_bus_rx_frame_t g_rx_ring[CAN_BUS_RX_RING_DEPTH];
+static void (*g_rx_wakeup_callback)(void);
+void can_bus_set_rx_wakeup_callback(void (*callback)(void)) {
+  g_rx_wakeup_callback = callback;
+}
 
 static inline uint16_t rb_next(uint16_t v) {
   v++;
@@ -317,7 +318,7 @@ static inline void rb_push(uint32_t std_id, const uint8_t *data, uint8_t len) {
   const unsigned sender_known = sender > 0U && sender < 8U;
   if (sender_known) ++g_can_rx_sender_frames[sender];
   const uint16_t head = g_rx_head, tail = g_rx_tail;
-  const unsigned occupied = head >= tail ? head - tail :
+  const unsigned occupied = head >= tail ? (unsigned)head - tail :
       CAN_BUS_RX_RING_DEPTH - tail + head;
   if (std_id >= 0x100U &&
       occupied >= CAN_BUS_RX_RING_DEPTH - 1U - 8U &&
@@ -346,6 +347,7 @@ static inline void rb_push(uint32_t std_id, const uint8_t *data, uint8_t len) {
 
   __DMB(); // publish slot before updating head (release)
   g_rx_head = rb_next(h);
+  if (g_rx_wakeup_callback) g_rx_wakeup_callback();
 }
 
 // Pop frame in thread context
@@ -354,20 +356,21 @@ static inline void rb_push(uint32_t std_id, const uint8_t *data, uint8_t len) {
 //  - After observing head != tail, we must ensure subsequent reads of the slot
 //    see the writes that happened-before the producer published head.
 //  - `__DMB()` acts as an acquire barrier here.
-static inline int rb_pop(can_bus_rx_frame_t *out) {
-  uint16_t t = g_rx_tail;
-  uint16_t h = g_rx_head;
-
-  if (h == t)
+static inline int rb_pop(can_bus_rx_frame_t *out)
+{
+  const uint32_t irq_mask = __get_PRIMASK();
+  __disable_irq();
+  const uint16_t t = g_rx_tail;
+  if (g_rx_head == t) {
+    __set_PRIMASK(irq_mask);
     return 0;
-
-  __DMB(); // ensure slot contents are visible after seeing head advance
-           // (acquire)
-
+  }
+  /* Priority eviction can move occupied slots in the ISR. Protect this copy. */
+  __DMB();
   *out = g_rx_ring[t];
-
-  __DMB(); // ensure slot read completes before we advance tail (conservative)
   g_rx_tail = rb_next(t);
+  __DMB();
+  __set_PRIMASK(irq_mask);
   return 1;
 }
 
@@ -424,7 +427,9 @@ static void can_bus_drain_rx_fifo(FDCAN_HandleTypeDef *hfdcan, uint32_t rx_fifo)
   FDCAN_RxHeaderTypeDef hdr;
   uint8_t data[64];
 
-  while (HAL_FDCAN_GetRxFifoFillLevel(hfdcan, rx_fifo) > 0U) {
+  uint32_t remaining = 3U; /* Physical FIFO depth; bound interrupt work. */
+  while (remaining-- > 0U &&
+         HAL_FDCAN_GetRxFifoFillLevel(hfdcan, rx_fifo) > 0U) {
     if (HAL_FDCAN_GetRxMessage(hfdcan, rx_fifo, &hdr, data) != HAL_OK) {
       break;
     }
@@ -794,7 +799,7 @@ uint32_t can_bus_process_rx_budget(uint32_t max_frames) {
 
 uint32_t can_bus_rx_pending(void) {
   const uint16_t head = g_rx_head, tail = g_rx_tail;
-  return head >= tail ? head - tail : CAN_BUS_RX_RING_DEPTH - tail + head;
+  return head >= tail ? (unsigned)head - tail : CAN_BUS_RX_RING_DEPTH - tail + head;
 }
 
 void can_bus_process_rx(void) {

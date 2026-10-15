@@ -8,20 +8,36 @@ class CanAdmissionTests(unittest.TestCase):
     def test_ring_preserves_control_capacity_and_packet_order(self):
         source = (ROOT / 'Core/Src/can_bus.c').read_text()
         ring = source[source.index('static inline uint16_t rb_next('):source.index('// =========================\n// Reassembly state')]
+        frame_start = source.index('typedef struct {', source.index('// RX ring buffer'))
+        frame = source[frame_start:source.index('} can_bus_rx_frame_t;', frame_start) + len('} can_bus_rx_frame_t;')]
         code = r'''
 #include <assert.h>
 #include <stdint.h>
 #include <string.h>
 #include "can_rx_admission.h"
 #define CAN_BUS_RX_RING_DEPTH 48U
-#define __DMB() ((void)0)
-typedef struct { uint32_t std_id; uint8_t len, data[64]; } can_bus_rx_frame_t;
+static uint32_t irq, consumer_expected;
+static uint32_t __get_PRIMASK(void) { return irq; }
+static void __disable_irq(void) { irq = 1; }
+static void __set_PRIMASK(uint32_t mask) { irq = mask; }
+#define __DMB() do { if (consumer_expected) assert(irq); } while (0)
+''' + frame + r'''
+_Static_assert(sizeof(can_bus_rx_frame_t) == 68U, "standard-ID RX storage must stay compact");
 static can_bus_rx_frame_t g_rx_ring[48];
 static uint16_t g_rx_head, g_rx_tail;
+static unsigned wakes;
+static void notify(void){assert(g_rx_head!=g_rx_tail);wakes++;}
+static void (*g_rx_wakeup_callback)(void);
 static uint32_t g_rx_dropped_frames, g_can_rx_bulk_dropped, g_can_rx_peer_dropped;
 static uint32_t g_can_rx_sender_frames[8], g_can_rx_sender_dropped[8];
 ''' + ring + r'''
 int main(void) {
+ uint8_t full[64]; memset(full, 0x5a, sizeof(full));
+ can_bus_rx_frame_t exact;
+ g_rx_wakeup_callback=notify;
+ rb_push(0x7ff, full, sizeof(full)); assert(wakes==1); consumer_expected=1;
+ assert(rb_pop(&exact)); consumer_expected=0;
+ assert(exact.std_id==0x7ff && exact.len==64 && memcmp(exact.data,full,64)==0);
  uint8_t bulk[16]={0,1,118}, status[16]={0,1,117}, fragment[64]={83,68,7,1,0,1,3,16,0};
  memcpy(fragment+9,bulk,16);
  assert(can_rx_is_bulk_telemetry(bulk,16));
@@ -114,6 +130,10 @@ int main(void) {
  for(unsigned i=0;i<39;i++) {assert(rb_pop(&power));assert(power.data[2]==111);}
  for(unsigned i=0;i<8;i++) {assert(rb_pop(&power));assert(power.data[2]==104);}
  assert(!rb_pop(&power));
+ // Empty and occupied ring consumption must restore the caller's IRQ mask.
+ assert(!irq); irq=1; assert(!rb_pop(&power) && irq);
+ rb_push(0x006,battery,16); assert(rb_pop(&power) && irq); irq=0;
+ assert(!rb_pop(&power) && !irq);
 
 }
 '''

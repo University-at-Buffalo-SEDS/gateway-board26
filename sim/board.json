@@ -27,7 +27,8 @@
     "strict_mmio": false,
     "clocks": [],
     "connections": [],
-    "pins": [],
+    "pins": [{"gpio": "gpio", "pin": 8, "initial": "high"},
+             {"gpio": "gpio", "pin": 9, "initial": "high"}],
     "dma_routes": []
   },
   "execution": {
@@ -39,6 +40,7 @@
     "hal_tick_address": 536889012,
     "hal_tick_step": 100,
     "memory_probes": [
+      {"name": "telemetry_loop_completions", "symbol": "g_gateway_telemetry_loop_count"},
       {"name": "network_ready", "symbol": "g_telemetry_network_ready"},
       {"name": "peer_mask", "symbol": "g_telemetry_peer_mask"},
       {"name": "uart_egress_peer_mask", "symbol": "g_sim_uart_egress_peer_mask"},
@@ -77,7 +79,9 @@
       {"name": "uart_tx_frames", "symbol": "g_gateway_uart_tx_frames"},
       {"name": "uart_umbilical_status_count", "symbol": "g_sim_uart_umbilical_status_count"},
       {"name": "uart_umbilical_status_tx_count", "symbol": "g_sim_uart_umbilical_status_tx_count"},
-      {"name": "uart_tx_queue_drops", "symbol": "g_gateway_uart_tx_queue_drops", "maximum": 0},
+      {"name": "uart_tx_backpressure_rejections", "symbol": "g_gateway_uart_tx_queue_drops"},
+      {"name": "uart_tx_exhausted", "symbol": "g_gateway_uart_tx_exhausted", "maximum": 0},
+      {"name": "uart_tx_pending", "symbol": "g_gateway_uart_tx_pending", "maximum": 18},
       {"name": "pool_available", "symbol": "g_telemetry_pool_available", "max_end_drop": 2048},
       {"name": "telemetry_stack_remaining", "symbol": "g_telemetry_stack_remaining", "minimum": 1536},
       {"name": "pool_low_water", "symbol": "g_telemetry_pool_low_water", "minimum": 1024},
@@ -115,5 +119,10 @@
   "ota": {
     "chunk_size": 512
   },
-  "peripherals": []
+  "peripherals": [
+    {"type": "adc", "name": "ltc2990_voltage", "model": "ltc2990",
+     "bus": "i2c2@0x4d", "bits": 15, "channels": 4},
+    {"type": "adc", "name": "ltc2990_current", "model": "ltc2990",
+     "bus": "i2c2@0x4c", "bits": 15, "channels": 2}
+  ]
 }

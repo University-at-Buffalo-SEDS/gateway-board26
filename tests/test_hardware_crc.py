@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 class HardwareCrcTests(unittest.TestCase):
     def test_incremental_state_fallback_and_interrupt_mask(self):
         source = (ROOT / "Core/Src/gateway_crc32.c").read_text()
-        driver = source[source.index("int32_t gateway_crc32_update("):source.index("\n#else\nint32_t gateway_crc32_update(")]
+        driver = source[source.index("int32_t gateway_crc32_update("):len(source)]
         harness = r"""
 #include <assert.h>
 #include <stdint.h>

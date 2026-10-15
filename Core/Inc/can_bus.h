@@ -12,6 +12,9 @@ typedef void (*can_bus_rx_cb_t)(const uint8_t *data, size_t len, void *user);
 
 /* Init with the FDCAN handle that receives on FIFO1 (e.g. &hfdcan2). */
 void can_bus_init(FDCAN_HandleTypeDef *hfdcan);
+/* Install before CAN starts. Called after publishing RX from IRQ context;
+ * callback must be nonblocking and must never dispatch network work. */
+void can_bus_set_rx_wakeup_callback(void (*callback)(void));
 /* False after initialization/recovery failure; watchdog must not be fed. */
 int can_bus_health_ok(void);
 

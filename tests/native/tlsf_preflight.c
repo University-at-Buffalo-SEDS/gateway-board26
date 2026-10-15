@@ -4,10 +4,11 @@
 #include "tlsf.h"
 static uint64_t arena[8192];
 static uint64_t hash;
+static size_t walked_free;
 static void digest(void *p,size_t n,int used,void *arg) {
- (void)arg; hash=hash*131U+(uintptr_t)p+n+(unsigned)used;
+ (void)arg; if(!used)walked_free+=n; hash=hash*131U+(uintptr_t)p+n+(unsigned)used;
 }
-static uint64_t snapshot(tlsf_t t) { hash=0;tlsf_walk_pool(tlsf_get_pool(t),digest,0);return hash; }
+static uint64_t snapshot(tlsf_t t) { hash=0;walked_free=0;tlsf_walk_pool(tlsf_get_pool(t),digest,0);assert(tlsf_free_size(t)==walked_free);return hash; }
 int main(void) {
  tlsf_t t=tlsf_create_with_pool(arena,sizeof(arena));assert(t);
  assert(!tlsf_can_memalign(t,0,8));assert(!tlsf_can_memalign(t,3,8));
@@ -28,4 +29,14 @@ int main(void) {
  }
  for(unsigned i=0;i<64;i++)tlsf_free(t,slots[i]);
  assert(tlsf_can_memalign(t,8,32768));
+ snapshot(t);size_t baseline=tlsf_free_size(t);
+ void *r=tlsf_malloc(t,1024);assert(r);snapshot(t);
+ r=tlsf_realloc(t,r,2048);assert(r);snapshot(t);
+ r=tlsf_realloc(t,r,32);assert(r);snapshot(t);
+ tlsf_free(t,r);snapshot(t);assert(tlsf_free_size(t)==baseline);
+ static uint64_t extra[1024];
+ pool_t pool=tlsf_add_pool(t,extra,sizeof(extra));assert(pool);
+ walked_free=0;tlsf_walk_pool(tlsf_get_pool(t),digest,0);
+ tlsf_walk_pool(pool,digest,0);assert(tlsf_free_size(t)==walked_free);
+ tlsf_remove_pool(t,pool);snapshot(t);assert(tlsf_free_size(t)==baseline);
 }
