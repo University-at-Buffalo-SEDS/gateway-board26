@@ -66,6 +66,29 @@ int main(int argc,char**argv){
  if(argc>1 && strcmp(argv[1],"init-failure")==0){fail_init=1;assert(!telemetry_tlsf_malloc(32));assert(g_telemetry_tlsf_init_failed);assert(!g_telemetry_tlsf_active);assert(mock_irq==0);return 0;}
  void *first=telemetry_tlsf_malloc(0);assert(first&&g_telemetry_tlsf_active);telemetry_tlsf_free(first);
  assert(!telemetry_tlsf_malloc(SIZE_MAX));
+ if(argc>1 && strcmp(argv[1],"small-protected-reserve")==0){
+  void *ordinary[1024]={0};unsigned n=0;
+  while(n<1024 && (ordinary[n]=ordinary_only(128))){n++;}
+  assert(n>200 && n<1024);
+  void *slots[48];
+  for(unsigned i=0;i<48;i++){slots[i]=telemetry_tlsf_malloc(256);assert(slots[i]);}
+  const uint64_t used=reserve_used;
+  const uint32_t live=g_telemetry_tlsf_live_bytes;
+  assert(!telemetry_tlsf_admit(2195,81));
+  assert(telemetry_tlsf_admit_small_protected(2195,81));
+  assert(!telemetry_tlsf_admit_small_protected(4096,81));
+  assert(reserve_used==used && g_telemetry_tlsf_live_bytes==live && mock_irq==0);
+  void *work[16];unsigned count=0;
+  work[count++]=telemetry_tlsf_malloc(1024);assert(work[0]);
+  size_t remaining=2195-1024;
+  while(remaining){size_t chunk=remaining>128?128:remaining;work[count]=telemetry_tlsf_malloc(chunk);assert(work[count++]);remaining-=chunk;}
+  assert(tlsf_free_size(allocator)+16384-reserve_live_bytes>=512);
+  for(unsigned i=0;i<count;i++)telemetry_tlsf_free(work[i]);
+  assert(reserve_used==used && g_telemetry_tlsf_live_bytes==live && tlsf_check(allocator)==0);
+  for(unsigned i=0;i<n;i++)telemetry_tlsf_free(ordinary[i]);
+  for(unsigned i=0;i<48;i++)telemetry_tlsf_free(slots[i]);
+  assert(!g_telemetry_tlsf_live_bytes);return 0;
+ }
  if(argc>1 && strcmp(argv[1],"control-reserve-padding")==0){
   // Linked capture: the first 27 reserve blocks are occupied, leaving
   // 37 contiguous blocks. A 2195-byte command needs a 1024-byte buffer,
@@ -279,3 +302,4 @@ int main(int argc,char**argv){
             subprocess.run([exe,'small-object-accounting'],check=True)
             subprocess.run([exe,'scattered-reserve-headroom'],check=True)
             subprocess.run([exe,'control-reserve-padding'],check=True)
+            subprocess.run([exe,'small-protected-reserve'],check=True)

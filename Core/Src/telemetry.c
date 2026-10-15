@@ -619,6 +619,8 @@ static UNUSED_FUNCTION bool gateway_admission_probe(size_t additional, size_t la
     if (!allowed) ++g_gateway_cached_denied;
     return allowed;
   }
+  if (work == SEDS_MEMORY_WORK_SMALL_PROTECTED)
+    return telemetry_tlsf_admit_small_protected(additional, largest);
   return telemetry_tlsf_admit(additional, largest);
 }
 #endif

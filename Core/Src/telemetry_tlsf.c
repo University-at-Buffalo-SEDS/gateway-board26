@@ -241,7 +241,7 @@ void telemetry_tlsf_sample(void)
  * actual aligned scratch allocation uses TLSF's bitmap lookup and bounded
  * split/coalesce operations; walking every heap block here delayed CAN RX.
  * The probe is released before returning and cannot recurse into this hook. */
-static bool admit_impl(size_t additional, size_t largest, bool cached_transit)
+static bool admit_impl(size_t additional, size_t largest, bool cached_transit, bool protected_control)
 {
     const uint32_t saved = __get_PRIMASK();
     __disable_irq();
@@ -249,7 +249,7 @@ static bool admit_impl(size_t additional, size_t largest, bool cached_transit)
 #ifdef SEDS_FIRMWARE_SIM_TEST
     uint32_t reason = 1U;
 #endif
-    const size_t reserve = additional <= 512U ? 512U : 4096U;
+    const size_t reserve = protected_control || additional <= 512U ? 512U : 4096U;
     /* Even a small wire ACK can allocate a larger owned queue/decoder object:
      * hardware captured a 676-byte request after a 160-byte scratch estimate.
      * Preserve the smaller ACK reserve, but admit its real working block. */
@@ -360,12 +360,21 @@ static bool admit_impl(size_t additional, size_t largest, bool cached_transit)
 
 /* Ordinary/cold decoder work retains the hardware-tested 1 KiB floor. */
 bool telemetry_tlsf_admit(size_t additional, size_t largest) {
-    return admit_impl(additional, largest, false);
+    return admit_impl(additional, largest, false, false);
 }
 bool telemetry_tlsf_admit_cached_transit(size_t additional, size_t largest) {
     if (additional < 1024U || additional > 1280U || largest == 0U || largest > 256U)
-        return admit_impl(additional, largest, false);
+        return admit_impl(additional, largest, false, false);
     /* The extended network probe verifies warmed metadata before supplying
      * this bound. Keep the same 4 KiB free-space safety reserve. */
-    return admit_impl(additional, 256U, true);
+    return admit_impl(additional, 256U, true, false);
+}
+
+/* The SDK only selects this class for <=128-byte validated fixed-shape
+ * reliable control/status frames. Preserve their full working estimate and
+ * 1 KiB contiguous floor, but allow use of the protected control headroom. */
+bool telemetry_tlsf_admit_small_protected(size_t additional, size_t largest) {
+    if (additional < 2048U || additional > 2432U || largest == 0U || largest > 160U)
+        return admit_impl(additional, largest, false, false);
+    return admit_impl(additional, largest, false, true);
 }
