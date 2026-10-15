@@ -66,7 +66,8 @@ the simulator probes. After generation, run
 
 [Board watchdog configuration and validation](docs/watchdog.md). Build with
 `./build.py build --release --watchdog`.
-Watchdogs are opt-in and require the matching bootloader.
+Watchdogs are enabled by default and require the matching bootloader.
+Use `--no-watchdog` only for a diagnostic build.
 ## Memory pressure and forwarding
 
 The telemetry loop drains TX before and between short CAN receive slices. Discovery
