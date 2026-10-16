@@ -12,7 +12,7 @@
 #define CAN_TX_FRAGMENT_BYTES 55U
 
 /* These hooks are foreground-only and preserve allocator emergency headroom. */
-extern void *telemetry_can_tx_allocate(size_t bytes);
+extern void *telemetry_can_tx_allocate_priority(size_t bytes, uint8_t protected_control);
 extern void telemetryFree(void *ptr);
 
 typedef struct can_tx_packet {
@@ -110,7 +110,7 @@ HAL_StatusTypeDef can_tx_queue_submit(const uint8_t *data, size_t len, uint32_t 
     if (full) ++g_can_tx_rejected;
     unlock(saved);
     if (full) return HAL_BUSY;
-    can_tx_packet *packet = telemetry_can_tx_allocate(sizeof(*packet) + len);
+    can_tx_packet *packet = telemetry_can_tx_allocate_priority(sizeof(*packet) + len, id < 0x100U);
     if (!packet) {
         saved = lock(); ++g_can_tx_rejected; unlock(saved);
         return HAL_BUSY;

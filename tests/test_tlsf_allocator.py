@@ -76,6 +76,10 @@ int main(int argc,char**argv){
   const uint32_t live=g_telemetry_tlsf_live_bytes;
   assert(!telemetry_tlsf_admit(2195,81));
   assert(telemetry_tlsf_admit_small_protected(2195,81));
+  assert(!telemetry_tlsf_admit(587,75));
+  assert(telemetry_tlsf_admit_can_control(75));
+  assert(!telemetry_tlsf_admit_can_control(0));
+  assert(!telemetry_tlsf_admit_can_control(161));
   assert(!telemetry_tlsf_admit_small_protected(4096,81));
   assert(reserve_used==used && g_telemetry_tlsf_live_bytes==live && mock_irq==0);
   void *work[16];unsigned count=0;
