@@ -872,6 +872,17 @@ static SedsResult init_telemetry_router_locked(void) {
     return SEDS_IO;
   }
 #endif
+  /* A bridge owns downstream replay after accepting a frozen parent.
+   * Match GS/RF so one lost child receipt can recover inside the 500 ms
+   * control target, retaining the existing 4.5-second delivery window. */
+  SedsRuntimeTuningConfig tuning;
+  result = seds_get_runtime_tuning_config(&tuning);
+  if (result != SEDS_OK) return result;
+  tuning.reliable_retransmit_ms = 250U;
+  tuning.reliable_max_retries = 17U;
+  result = seds_set_runtime_tuning_config(&tuning);
+  if (result != SEDS_OK) return result;
+
   /* Keep one clock origin through construction and initial queue service. */
   g_router.start_time = tx_raw_now_ms_locked();
   r = seds_router_new(node_now_since_ms, NULL, NULL, 0U);
