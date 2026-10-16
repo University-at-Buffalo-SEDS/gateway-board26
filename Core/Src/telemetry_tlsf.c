@@ -382,5 +382,5 @@ bool telemetry_tlsf_admit_small_protected(size_t additional, size_t largest) {
 /* Called only for a priority CAN frame, including queue metadata, <=160 B. */
 bool telemetry_tlsf_admit_can_control(size_t bytes) {
     return bytes != 0U && bytes <= 160U &&
-        telemetry_tlsf_admit_small_protected(2048U + 2U * bytes, bytes);
+        admit_impl(bytes + 512U, bytes, false, true);
 }

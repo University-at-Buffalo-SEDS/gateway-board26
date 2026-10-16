@@ -362,7 +362,7 @@ void *telemetry_can_tx_allocate_priority(size_t bytes, uint8_t protected_control
                              TX_NULL, TX_NULL, TX_NULL, TX_NULL) != TX_SUCCESS)
         return NULL;
     const size_t free_bytes = (size_t)available + emergency;
-    const size_t working = 2048U + 2U * bytes;
+    const size_t working = bytes + 512U;
     if (working > free_bytes || free_bytes - working < 512U) return NULL;
 #endif
     return telemetryMalloc(bytes);

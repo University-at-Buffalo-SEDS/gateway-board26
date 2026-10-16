@@ -130,6 +130,8 @@ int main(void){
  assert(!telemetry_can_tx_allocate(128));assert(!allocations);
  assert(!telemetry_can_tx_allocate_priority(128,0));
  assert(telemetry_can_tx_allocate_priority(128,1));allocations=0;
+ small.available=2468;assert(!telemetry_can_tx_allocate_priority(128,0));
+ assert(telemetry_can_tx_allocate_priority(128,1));allocations=0;small.available=4200;
  large.available=24;assert(telemetry_can_tx_allocate(128));assert(allocations==1);
  small.available=1;large.available=0;assert(!telemetry_can_tx_allocate(128));
  rust_byte_pool_external=NULL;assert(!telemetry_can_tx_allocate(128));

@@ -89,6 +89,18 @@ int main(int argc,char**argv){
   assert(tlsf_free_size(allocator)+16384-reserve_live_bytes>=512);
   for(unsigned i=0;i<count;i++)telemetry_tlsf_free(work[i]);
   assert(reserve_used==used && g_telemetry_tlsf_live_bytes==live && tlsf_check(allocator)==0);
+  /* Captured starvation: decoding has finished, but only ~2.4 KiB remains.
+   * A 75-byte CAN copy needs its original copy estimate, not another decode. */
+  void *occupied_copy_headroom[7];
+  for(unsigned i=0;i<7;i++){occupied_copy_headroom[i]=telemetry_tlsf_malloc(256);assert(occupied_copy_headroom[i]);}
+  const size_t copy_free=tlsf_free_size(allocator)+16384-reserve_live_bytes;
+  assert(copy_free>=1536 && copy_free<2710);
+  assert(!telemetry_tlsf_admit_small_protected(2198,75));
+  assert(telemetry_tlsf_admit_can_control(75));
+  void *copy=telemetry_tlsf_malloc(75);assert(copy);telemetry_tlsf_free(copy);
+  assert(tlsf_free_size(allocator)+16384-reserve_live_bytes>=512);
+  for(unsigned i=0;i<7;i++)telemetry_tlsf_free(occupied_copy_headroom[i]);
+
   for(unsigned i=0;i<n;i++)telemetry_tlsf_free(ordinary[i]);
   for(unsigned i=0;i<48;i++)telemetry_tlsf_free(slots[i]);
   assert(!g_telemetry_tlsf_live_bytes);return 0;
