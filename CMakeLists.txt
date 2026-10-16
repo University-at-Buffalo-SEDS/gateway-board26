@@ -28,6 +28,14 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS TRUE)
 project(${CMAKE_PROJECT_NAME})
 message("Build type: " ${CMAKE_BUILD_TYPE})
 
+# Keep the complete network feature set in the 512 KiB part. Apply the
+# release LTO to the HAL/object libraries as well
+# as the application, so unused cross-file driver paths can be removed.
+if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
+endif()
+
+
 # Enable CMake support for ASM and C languages
 enable_language(C ASM)
 option(GATEWAY_HIL_DIAGNOSTICS
