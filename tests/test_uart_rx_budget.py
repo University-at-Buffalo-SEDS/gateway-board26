@@ -30,12 +30,12 @@ class UartReceiveBudgetTests(unittest.TestCase):
 #include <string.h>
 #define TELEMETRY_UART_RX_DMA_BUF_SIZE 512U
 #define TELEMETRY_UART_RX_RING_DEPTH 8U
+#define TELEMETRY_UART_RX_RING_BYTES 4096U
 #define TELEMETRY_UART_RX_SERVICE_BYTES 512U
 #define TELEMETRY_UART_RX_SERVICE_MS 1U
-typedef struct {uint16_t len;uint8_t data[512];} TelemetryUartRxItem;
 static struct {
- TelemetryUartRxItem rx_ring[8];
- unsigned rx_head,rx_tail,rx_count,rx_item_offset;
+ uint8_t rx_ring[4096];
+ unsigned rx_head,rx_tail,rx_count;
  unsigned rx_dma_drop_count,rx_dma_active;
 } g_telemetry_uart;
 static unsigned g_gateway_uart_rx_ring_drops;
@@ -61,15 +61,15 @@ int main(void){
  assert(g_telemetry_uart.rx_count==0);
  telemetry_uart_rx_ring_push_isr(data,512);
  advance=1;tick=UINT32_MAX;
- telemetry_uart_process();assert(received==1 && g_telemetry_uart.rx_item_offset==1);
- assert(g_telemetry_uart.rx_count==1 && flushes==1 && restarts==1);
+ telemetry_uart_process();assert(received==1 && g_telemetry_uart.rx_head==1);
+ assert(g_telemetry_uart.rx_count==511 && flushes==1 && restarts==1);
  // Resume exactly at the saved byte after timer wrap, then drain to empty.
  advance=0;telemetry_uart_process();assert(received==512 && !g_telemetry_uart.rx_count);
  // A producer that continuously refills cannot keep the consumer in one call.
  refill=1;telemetry_uart_rx_ring_push_isr(data,512);
  for(unsigned n=0;n<32;n++){
    unsigned before=received;telemetry_uart_process();assert(received-before==512);
-   assert(g_telemetry_uart.rx_count==1);
+   assert(g_telemetry_uart.rx_count==512);
  }
  refill=0;telemetry_uart_process();assert(!g_telemetry_uart.rx_count);
  unsigned before=received;
@@ -77,6 +77,18 @@ int main(void){
  telemetry_uart_rx_ring_push_isr(data,512);assert(g_gateway_uart_rx_ring_drops==1);
  for(unsigned n=0;n<8;n++)telemetry_uart_process();
  assert(received-before==4096 && !g_telemetry_uart.rx_count);
+ // Short IDLE fragments must share byte capacity instead of exhausting eight descriptors.
+ memset(&g_telemetry_uart,0,sizeof(g_telemetry_uart));
+ g_gateway_uart_rx_ring_drops=0;received=0;tick=0;
+ for(unsigned n=0;n<64;n++)telemetry_uart_rx_ring_push_isr(data+n,1);
+ assert(g_gateway_uart_rx_ring_drops==0);
+ telemetry_uart_process();assert(received==64 && !g_telemetry_uart.rx_count);
+ // Wrap through all 4 KiB using minimum-sized IDLE callbacks.
+ received=0;
+ for(unsigned n=0;n<4096;n++)telemetry_uart_rx_ring_push_isr(data+(n%512),1);
+ telemetry_uart_rx_ring_push_isr(data,1);assert(g_gateway_uart_rx_ring_drops==1);
+ for(unsigned n=0;n<8;n++)telemetry_uart_process();
+ assert(received==4096 && !g_telemetry_uart.rx_count);
 }
 '''
         with tempfile.TemporaryDirectory() as d:

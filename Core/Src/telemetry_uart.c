@@ -28,24 +28,20 @@
 #define TELEMETRY_UART_HEADER_SIZE 4U
 #define TELEMETRY_UART_RX_DMA_BUF_SIZE 512U
 #define TELEMETRY_UART_RX_RING_DEPTH 8U
+#define TELEMETRY_UART_RX_RING_BYTES \
+  (TELEMETRY_UART_RX_RING_DEPTH * TELEMETRY_UART_RX_DMA_BUF_SIZE)
 #define TELEMETRY_UART_RX_SERVICE_BYTES 512U
 #define TELEMETRY_UART_RX_SERVICE_MS 1U
 #define UNUSED_FUNCTION __attribute__((unused))
 
 typedef struct {
-  uint16_t len;
-  uint8_t data[TELEMETRY_UART_RX_DMA_BUF_SIZE];
-} TelemetryUartRxItem;
-
-typedef struct {
   UART_HandleTypeDef *huart;
   uint8_t rx_dma_buf[TELEMETRY_UART_RX_DMA_BUF_SIZE];
   uint16_t rx_dma_position;
-  TelemetryUartRxItem rx_ring[TELEMETRY_UART_RX_RING_DEPTH];
+  uint8_t rx_ring[TELEMETRY_UART_RX_RING_BYTES];
   volatile uint32_t rx_head;
   volatile uint32_t rx_tail;
   volatile uint32_t rx_count;
-  uint16_t rx_item_offset;
   uint8_t rx_frame[TELEMETRY_UART_FRAME_SIZE];
   size_t rx_fill;
   size_t rx_expected;
@@ -171,7 +167,7 @@ static HAL_StatusTypeDef telemetry_uart_start_rx_dma(void) {
 }
 
 static void telemetry_uart_rx_ring_push_isr(const uint8_t *data, uint16_t len) {
-  TelemetryUartRxItem *item;
+  unsigned first;
 
   if (data == NULL || len == 0U) {
     return;
@@ -181,35 +177,34 @@ static void telemetry_uart_rx_ring_push_isr(const uint8_t *data, uint16_t len) {
     len = TELEMETRY_UART_RX_DMA_BUF_SIZE;
   }
 
-  if (g_telemetry_uart.rx_count >= TELEMETRY_UART_RX_RING_DEPTH) {
+  if (len > TELEMETRY_UART_RX_RING_BYTES - g_telemetry_uart.rx_count) {
     g_telemetry_uart.rx_dma_drop_count++;
     g_gateway_uart_rx_ring_drops++;
     return;
   }
 
-  item = &g_telemetry_uart.rx_ring[g_telemetry_uart.rx_tail];
-  item->len = len;
-  memcpy(item->data, data, len);
+  /* IDLE can report one-byte fragments. Pack them into the same 4 KiB
+   * payload capacity instead of spending a whole DMA descriptor per fragment.
+   * Reject the whole incoming chunk on true byte exhaustion; never overwrite
+   * bytes already accepted by the foreground consumer. */
+  first = TELEMETRY_UART_RX_RING_BYTES - g_telemetry_uart.rx_tail;
+  if (first > len) first = len;
+  memcpy(&g_telemetry_uart.rx_ring[g_telemetry_uart.rx_tail], data, first);
+  if (first < len) memcpy(g_telemetry_uart.rx_ring, data + first, len - first);
   g_telemetry_uart.rx_tail =
-      (g_telemetry_uart.rx_tail + 1U) % TELEMETRY_UART_RX_RING_DEPTH;
-  g_telemetry_uart.rx_count++;
+      (g_telemetry_uart.rx_tail + len) % TELEMETRY_UART_RX_RING_BYTES;
+  g_telemetry_uart.rx_count += len;
 }
 
-/* Consume one byte without releasing a partially processed DMA chunk. This
- * lets the foreground yield to CAN at its deadline and resume losslessly. */
+/* Consume one byte so foreground service can yield to CAN at its deadline. */
 static uint8_t telemetry_uart_rx_ring_pop_byte(uint8_t *out) {
   uint8_t have = 0U;
   const uint32_t primask = telemetry_uart_irq_save();
   if (out != NULL && g_telemetry_uart.rx_count > 0U) {
-    const TelemetryUartRxItem *item =
-        &g_telemetry_uart.rx_ring[g_telemetry_uart.rx_head];
-    *out = item->data[g_telemetry_uart.rx_item_offset++];
-    if (g_telemetry_uart.rx_item_offset == item->len) {
-      g_telemetry_uart.rx_item_offset = 0U;
-      g_telemetry_uart.rx_head =
-          (g_telemetry_uart.rx_head + 1U) % TELEMETRY_UART_RX_RING_DEPTH;
-      g_telemetry_uart.rx_count--;
-    }
+    *out = g_telemetry_uart.rx_ring[g_telemetry_uart.rx_head];
+    g_telemetry_uart.rx_head =
+        (g_telemetry_uart.rx_head + 1U) % TELEMETRY_UART_RX_RING_BYTES;
+    g_telemetry_uart.rx_count--;
     have = 1U;
   }
   telemetry_uart_irq_restore(primask);
