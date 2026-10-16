@@ -67,6 +67,9 @@
       {"name": "fdcan_tx_ok", "symbol": "g_fdcan_tx_ok_count"},
       {"name": "fdcan_tx_fail", "symbol": "g_fdcan_tx_fail_count", "maximum": 0},
       {"name": "uart_rx_frames", "symbol": "g_gateway_uart_rx_frames"},
+      {"name": "uart_rx_hw_errors", "symbol": "g_gateway_uart_rx_hw_errors", "maximum": 0},
+      {"name": "uart_rx_ring_drops", "symbol": "g_gateway_uart_rx_ring_drops", "maximum": 0},
+      {"name": "uart_rx_restart_failures", "symbol": "g_gateway_uart_rx_restarts_failed", "maximum": 0},
       {"name": "uart_rx_irq_bytes", "symbol": "g_sim_uart_rx_irq_bytes"},
       {"name": "uart_rx_start_ok", "symbol": "g_sim_uart_rx_start_ok"},
       {"name": "uart_rx_start_fail", "symbol": "g_sim_uart_rx_start_fail", "maximum": 0},
@@ -107,7 +110,16 @@
       {"name": "flight_state_restores", "symbol": "g_flight_state_cache_restores"},
       {"name": "flight_state_writes", "symbol": "g_flight_state_cache_writes"},
       {"name": "flight_state_updates", "symbol": "g_flight_state_cache_updates"},
-      {"name": "flight_state_errors", "symbol": "g_flight_state_cache_errors", "maximum": 0}
+      {"name": "flight_state_errors", "symbol": "g_flight_state_cache_errors", "maximum": 0},
+      {"name": "sim_uart_admission_fail", "symbol": "g_sim_uart_admission_fail"},
+      {"name": "sim_uart_admission_last_type", "symbol": "g_sim_uart_admission_last_type"},
+      {"name": "gateway_admission_last_free", "symbol": "g_gateway_admission_last_free"},
+      {"name": "gateway_admission_last_additional", "symbol": "g_gateway_admission_last_additional"},
+      {"name": "gateway_admission_last_largest", "symbol": "g_gateway_admission_last_largest"},
+      {"name": "gateway_admission_last_reason", "symbol": "g_gateway_admission_last_reason"},
+      {"name": "gateway_can_admission_fail", "symbol": "g_gateway_can_admission_fail"},
+      {"name": "gateway_can_queue_fail", "symbol": "g_gateway_can_queue_fail"},
+      {"name": "gateway_queue_service_fail", "symbol": "g_gateway_queue_service_fail"}
     ]
   },
   "traffic": {

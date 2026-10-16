@@ -10,6 +10,15 @@ extern volatile uint32_t g_telemetry_tlsf_free_bytes;
 extern volatile uint32_t g_telemetry_tlsf_free_blocks;
 #endif
 
+/* These ThreadX-only counters have no writers in the TLSF build. Keep
+ * explicit read-only zeroes for debugger/simulator probes without charging RAM.
+ * Active TLSF failure and free-space counters remain live and writable. */
+#ifdef TELEMETRY_USE_TLSF
+#define THREADX_ONLY_PROBE const __attribute__((used, retain))
+#else
+#define THREADX_ONLY_PROBE volatile
+#endif
+
 #ifndef TELEMETRY_USE_TLSF
 static TX_BYTE_POOL *rust_byte_pool_external = NULL;
 static TX_BYTE_POOL *rust_emergency_byte_pool_external = NULL;
@@ -39,8 +48,8 @@ volatile uint32_t g_telemetry_alloc_failure_fragments = 0U;
 volatile ULONG g_telemetry_pool_available = 0U;
 volatile ULONG g_telemetry_pool_low_water = ~0UL;
 volatile ULONG g_telemetry_pool_fragments = 0U;
-volatile ULONG g_telemetry_emergency_pool_available = 0U;
-volatile uint32_t g_telemetry_alloc_emergency_recoveries = 0U;
+THREADX_ONLY_PROBE ULONG g_telemetry_emergency_pool_available = 0U;
+THREADX_ONLY_PROBE uint32_t g_telemetry_alloc_emergency_recoveries = 0U;
 static volatile uint8_t g_last_err_memory_hint = 0U;
 static volatile uint8_t g_last_err_mutex_hint = 0U;
 

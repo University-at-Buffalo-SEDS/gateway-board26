@@ -35,8 +35,7 @@ class QualificationContractTests(unittest.TestCase):
         self.assertIn("TX_APP_MEM_POOL_SIZE=73728", ioc)
         self.assertIn("UX_DEVICE_APP_MEM_POOL_SIZE=20904", ioc)
 
-        from sim.run_full import load_layout_for_build
-        layout = load_layout_for_build(root, None)
+        layout = json.loads((root / "sim/board.json").read_text())
         probes = {
             probe["name"]: probe
             for probe in layout["execution"]["memory_probes"]

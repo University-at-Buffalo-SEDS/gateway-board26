@@ -1,4 +1,5 @@
 #include "telemetry_uart.h"
+#include "uart_dma_rx.h"
 #include "gateway_status_probe.h"
 #include "sim_network_probe.h"
 
@@ -39,6 +40,7 @@ typedef struct {
 typedef struct {
   UART_HandleTypeDef *huart;
   uint8_t rx_dma_buf[TELEMETRY_UART_RX_DMA_BUF_SIZE];
+  uint16_t rx_dma_position;
   TelemetryUartRxItem rx_ring[TELEMETRY_UART_RX_RING_DEPTH];
   volatile uint32_t rx_head;
   volatile uint32_t rx_tail;
@@ -150,7 +152,7 @@ static HAL_StatusTypeDef telemetry_uart_start_rx_dma(void) {
                                         TELEMETRY_UART_RX_DMA_BUF_SIZE);
   g_telemetry_uart.rx_dma_last_error_code = g_telemetry_uart.huart->ErrorCode;
   if (status == HAL_OK && g_telemetry_uart.huart->hdmarx != NULL) {
-    __HAL_DMA_DISABLE_IT(g_telemetry_uart.huart->hdmarx, DMA_IT_HT);
+    g_telemetry_uart.rx_dma_position = 0U;
     g_telemetry_uart.rx_dma_active = 1U;
     g_telemetry_uart.rx_dma_start_ok_count++;
 #ifdef SEDS_FIRMWARE_SIM_TEST
@@ -794,12 +796,11 @@ void telemetry_uart_handle_rx_event(UART_HandleTypeDef *huart, uint16_t size) {
     g_telemetry_uart.rx_dma_ht_event_count++;
   }
 
-  telemetry_uart_rx_ring_push_isr(g_telemetry_uart.rx_dma_buf, size);
-  if (telemetry_uart_start_rx_dma() != HAL_OK) {
-    g_telemetry_uart.rx_dma_active = 0U;
-    g_telemetry_uart.rx_restart_error_count++;
-    g_gateway_uart_rx_restarts_failed++;
-  }
+  uart_dma_rx_consume(g_telemetry_uart.rx_dma_buf,
+                      TELEMETRY_UART_RX_DMA_BUF_SIZE, size,
+                      &g_telemetry_uart.rx_dma_position,
+                      telemetry_uart_rx_ring_push_isr);
+  /* Circular DMA stays armed; only a hardware error restarts reception. */
 }
 
 void telemetry_uart_handle_error(UART_HandleTypeDef *huart) {

@@ -37,11 +37,21 @@ if(GATEWAY_HIL_DIAGNOSTICS)
 endif()
 option(SEDS_FIRMWARE_SIM_TEST "Enable simulator-only network observability" OFF)
 if(SEDS_FIRMWARE_SIM_TEST)
+
+
     add_compile_definitions(SEDS_FIRMWARE_SIM_TEST=1)
 endif()
 
 # Create an executable object type
 add_executable(${CMAKE_PROJECT_NAME})
+if(SEDS_FIRMWARE_SIM_TEST)
+    # Inactive allocator probes are read-only zeroes in TLSF builds; LTO
+    # still needs explicit roots so the debugger can resolve their symbols.
+    target_link_options(gateway_board PRIVATE
+        -Wl,--undefined=g_telemetry_emergency_pool_available
+        -Wl,--undefined=g_telemetry_alloc_emergency_recoveries
+    )
+endif()
 include(cmake/tlsf_allocator.cmake)
 
 # Optional SEDSnet arena is enabled with SEDSNET_COMPACT_PACKET_STORE=ON.

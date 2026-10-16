@@ -114,7 +114,7 @@ int main(void){
 #define __HAL_DMA_DISABLE_IT(d,f) ((void)(d),(void)(f),++disabled)
 typedef int HAL_StatusTypeDef;
 typedef struct {void *hdmarx;uint32_t ErrorCode;} UART_HandleTypeDef;
-static struct { UART_HandleTypeDef *huart;uint8_t rx_dma_buf[512];unsigned rx_dma_active,rx_dma_start_ok_count,rx_dma_start_busy_count,rx_dma_start_error_count,rx_dma_last_error_code;} g_telemetry_uart;
+static struct { UART_HandleTypeDef *huart;uint8_t rx_dma_buf[512];unsigned rx_dma_position,rx_dma_active,rx_dma_start_ok_count,rx_dma_start_busy_count,rx_dma_start_error_count,rx_dma_last_error_code;} g_telemetry_uart;
 static unsigned calls,disabled;
 static int result;
 #ifdef SEDS_FIRMWARE_SIM_TEST
@@ -125,7 +125,7 @@ static int HAL_UARTEx_ReceiveToIdle_DMA(UART_HandleTypeDef *u,uint8_t *p,unsigne
 int main(void){
  assert(telemetry_uart_start_rx_dma()==HAL_ERROR && calls==0);
  UART_HandleTypeDef u={(void*)1,7};g_telemetry_uart.huart=&u;
- assert(telemetry_uart_start_rx_dma()==HAL_OK && calls==1 && disabled==1 && g_telemetry_uart.rx_dma_active);
+ assert(telemetry_uart_start_rx_dma()==HAL_OK && calls==1 && disabled==0 && g_telemetry_uart.rx_dma_active);
  result=HAL_BUSY;assert(telemetry_uart_start_rx_dma()==HAL_BUSY && calls==2 && !g_telemetry_uart.rx_dma_active);
  assert(g_telemetry_uart.rx_dma_start_busy_count==1);
  result=HAL_ERROR;assert(telemetry_uart_start_rx_dma()==HAL_ERROR && calls==3 && !g_telemetry_uart.rx_dma_active);
