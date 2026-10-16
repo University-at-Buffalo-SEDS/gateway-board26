@@ -124,6 +124,14 @@ volatile uint32_t g_gateway_peer_probe_request;
 volatile int32_t g_gateway_peer_probe_result;
 char *g_gateway_peer_probe_json;
 static uint32_t peer_probe_tick;
+#if defined(SEDS_FIRMWARE_SIM_TEST) || defined(GATEWAY_HIL_DIAGNOSTICS)
+/* Request 8 copies pending replay metadata without allocating diagnostic JSON. */
+SedsReliablePendingRow g_gateway_pending_probe_rows[1] __attribute__((used, externally_visible));
+volatile uint32_t g_gateway_pending_probe_index __attribute__((used, externally_visible));
+volatile int32_t g_gateway_pending_probe_count __attribute__((used, externally_visible));
+volatile uint32_t g_gateway_pending_probe_tick __attribute__((used, externally_visible));
+#endif
+
 extern void *telemetry_can_tx_allocate(size_t bytes);
 extern void telemetryFree(void *ptr);
 
@@ -439,6 +447,17 @@ void telemetry_set_unix_time_ms(uint64_t unix_ms) {
 void telemetry_hil_capture_requested_snapshot(void) {
   const uint32_t request = g_gateway_peer_probe_request;
   const uint32_t now = HAL_GetTick();
+#if defined(SEDS_FIRMWARE_SIM_TEST) || defined(GATEWAY_HIL_DIAGNOSTICS)
+  if (request == 8U && g_router.r != NULL) {
+    telemetry_lock();
+    g_gateway_pending_probe_count = seds_router_copy_reliable_pending(
+        g_router.r, g_gateway_pending_probe_index, g_gateway_pending_probe_rows, 1U);
+    telemetry_unlock();
+    g_gateway_pending_probe_tick = now;
+    g_gateway_peer_probe_request = 0U;
+    return;
+  }
+#endif
   if (request == 5U || (request == 0U && g_gateway_peer_probe_json != NULL &&
                        (uint32_t)(now - peer_probe_tick) >= 10000U)) {
     telemetryFree(g_gateway_peer_probe_json);

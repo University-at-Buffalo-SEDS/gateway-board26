@@ -343,6 +343,31 @@ void *telemetry_can_tx_allocate(size_t bytes)
     return telemetryMalloc(bytes);
 }
 
+/* Only bounded priority CAN packets may borrow control headroom. Bulk queue
+ * copies and diagnostic exports retain the ordinary 4 KiB reserve. */
+void *telemetry_can_tx_allocate_priority(size_t bytes, uint8_t protected_control)
+{
+    if (!protected_control || bytes == 0U || bytes > 160U)
+        return telemetry_can_tx_allocate(bytes);
+#ifdef TELEMETRY_USE_TLSF
+    if (!telemetry_tlsf_admit_can_control(bytes)) return NULL;
+#else
+    ULONG available = 0U;
+    ULONG emergency = 0U;
+    if (rust_emergency_byte_pool_external)
+        (void)tx_byte_pool_info_get(rust_emergency_byte_pool_external, TX_NULL,
+                                   &emergency, TX_NULL, TX_NULL, TX_NULL, TX_NULL);
+    if (!rust_byte_pool_external ||
+        tx_byte_pool_info_get(rust_byte_pool_external, TX_NULL, &available,
+                             TX_NULL, TX_NULL, TX_NULL, TX_NULL) != TX_SUCCESS)
+        return NULL;
+    const size_t free_bytes = (size_t)available + emergency;
+    const size_t working = 2048U + 2U * bytes;
+    if (working > free_bytes || free_bytes - working < 512U) return NULL;
+#endif
+    return telemetryMalloc(bytes);
+}
+
 void telemetryFree(void *pv)
 {
 #ifdef TELEMETRY_USE_TLSF

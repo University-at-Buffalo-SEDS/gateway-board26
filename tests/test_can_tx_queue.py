@@ -33,11 +33,11 @@ uint32_t HAL_GetTick(void);
 #include <string.h>
 uint32_t irq;
 static uint32_t tick;
-static unsigned free_slots,allocations,frees,failed_alloc,hal_error,count;
+static unsigned free_slots,allocations,frees,failed_alloc,hal_error,count,last_protected;
 static uint8_t wire[4096][64];static uint32_t ids[4096];
 extern volatile uint32_t g_can_tx_queue_bytes,g_can_tx_pending,g_can_tx_rejected,g_can_tx_expired,g_can_tx_submitted;
 uint32_t HAL_GetTick(void){return tick;}
-void *telemetry_can_tx_allocate(size_t n){assert(!irq);if(failed_alloc)return NULL;allocations++;return malloc(n);}
+void *telemetry_can_tx_allocate_priority(size_t n,uint8_t protected_control){assert(protected_control<=1);last_protected=protected_control;assert(!irq);if(failed_alloc)return NULL;allocations++;return malloc(n);}
 void telemetryFree(void *p){assert(!irq);frees++;free(p);}
 HAL_StatusTypeDef can_bus_send_bytes(const uint8_t *p,size_t n,uint32_t id){
  assert(irq && n>=9 && n<=64);
@@ -54,7 +54,7 @@ int main(void){
  assert(can_tx_queue_submit(data,0,0)==HAL_ERROR);
  assert(can_tx_queue_submit(data,129,0)==HAL_ERROR);
  assert(can_tx_queue_submit(data,128,0x104)==HAL_OK);
- assert(g_can_tx_pending==1 && count==0);memset(data,99,sizeof(data));
+ assert(!last_protected);assert(g_can_tx_pending==1 && count==0);memset(data,99,sizeof(data));
  free_slots=1;interrupt();assert(count==1 && frees==0 && g_can_tx_pending==1);
  hal_error=1;free_slots=3;interrupt();assert(count==1);
  hal_error=0;interrupt();assert(count==3 && g_can_tx_pending==0 && frees==0);
@@ -84,6 +84,9 @@ int main(void){
  can_tx_queue_service();assert(!g_can_tx_queue_bytes && allocations==frees);
  free_slots=0;assert(can_tx_queue_submit(data,128,0)==HAL_OK);can_tx_queue_reset();
  assert(!g_can_tx_queue_bytes && !g_can_tx_pending && allocations==frees);
+ // Priority identity survives the copy boundary; bulk cannot borrow it.
+ free_slots=3;assert(can_tx_queue_submit(data,59,0x004)==HAL_OK);assert(last_protected);
+ free_slots=3;assert(can_tx_queue_submit(data,59,0x104)==HAL_OK);assert(!last_protected);
  // Repeated small packets exercise sequence and queue reuse/wrap.
  for(unsigned i=0;i<300;i++){free_slots=3;assert(can_tx_queue_submit(data,1,0)==HAL_OK);}
  assert(allocations==frees);
@@ -99,6 +102,7 @@ int main(void){
         end = source.index('void telemetryFree(', start)
         harness = r'''
 #include <stddef.h>
+#include <stdint.h>
 #include <assert.h>
 typedef unsigned long ULONG;
 typedef struct {ULONG available;} TX_BYTE_POOL;
@@ -106,19 +110,26 @@ typedef struct {ULONG available;} TX_BYTE_POOL;
 #define TX_SUCCESS 0
 static TX_BYTE_POOL small={4200},large={0};
 static TX_BYTE_POOL *rust_byte_pool_external=&small,*rust_emergency_byte_pool_external=&large;
-static unsigned allocations,denied;
+static unsigned allocations,denied,protected_checks;
 static int tx_byte_pool_info_get(TX_BYTE_POOL *p,void*a,ULONG*v,void*b,void*c,void*d,void*e){
  (void)a;(void)b;(void)c;(void)d;(void)e;*v=p->available;return 0;
 }
 static int telemetry_tlsf_admit(size_t additional,size_t largest){assert(additional==largest+512);return !denied;}
+static int telemetry_tlsf_admit_can_control(size_t n){assert(n && n<=160);protected_checks++;return !denied;}
 static void *telemetryMalloc(size_t n){(void)n;allocations++;return &small;}
 ''' + source[start:end] + r'''
 int main(void){
 #ifdef TELEMETRY_USE_TLSF
  assert(telemetry_can_tx_allocate(128));denied=1;
  assert(!telemetry_can_tx_allocate(128));assert(allocations==1);
+ assert(!telemetry_can_tx_allocate_priority(128,1));assert(protected_checks==1);
+ denied=0;assert(telemetry_can_tx_allocate_priority(128,1));assert(protected_checks==2);
+ assert(telemetry_can_tx_allocate_priority(128,0));assert(protected_checks==2);
+ assert(telemetry_can_tx_allocate_priority(161,1));assert(protected_checks==2);
 #else
  assert(!telemetry_can_tx_allocate(128));assert(!allocations);
+ assert(!telemetry_can_tx_allocate_priority(128,0));
+ assert(telemetry_can_tx_allocate_priority(128,1));allocations=0;
  large.available=24;assert(telemetry_can_tx_allocate(128));assert(allocations==1);
  small.available=1;large.available=0;assert(!telemetry_can_tx_allocate(128));
  rust_byte_pool_external=NULL;assert(!telemetry_can_tx_allocate(128));
