@@ -18,13 +18,19 @@ static uint32_t live_allocations;
 #define LARGE_SLOT_BYTES 4096U
 #define LARGE_SLOT_COUNT 4U
 #ifndef RESERVE_BLOCK_BYTES
-#define RESERVE_BLOCK_BYTES 256U
+#define RESERVE_BLOCK_BYTES 128U
 #endif
-#define RESERVE_BLOCK_COUNT 64U
+#define RESERVE_BLOCK_COUNT (16384U / RESERVE_BLOCK_BYTES)
+#define RESERVE_WORD_COUNT ((RESERVE_BLOCK_COUNT + 31U) / 32U)
 #define LARGE_RESERVE_BYTES (RESERVE_BLOCK_BYTES * RESERVE_BLOCK_COUNT)
 static uint8_t *large_slots;
-static uint64_t reserve_used;
-static uint8_t reserve_lengths[RESERVE_BLOCK_COUNT];
+typedef struct { uint32_t words[RESERVE_WORD_COUNT]; } ReserveBitmap;
+static ReserveBitmap reserve_used;
+_Static_assert(LARGE_RESERVE_BYTES == 16384U, "Preserve the full fallback capacity");
+/* Allocation-end bits distinguish adjacent occupied runs without a length
+ * byte per slot. Both128-bit maps together use32bytes. */
+static ReserveBitmap reserve_ends;
+_Static_assert(2U * sizeof(ReserveBitmap) <= 32U, "Bound fallback bookkeeping");
 static uint32_t reserve_live_bytes;
 volatile uint32_t g_gateway_large_slot_live;
 volatile uint32_t g_gateway_large_slot_peak;
@@ -36,41 +42,87 @@ volatile uint32_t g_gateway_admission_last_reason;
 uint64_t telemetry_tlsf_reserve_mask(void) {
     const uint32_t saved = __get_PRIMASK();
     __disable_irq();
-    const uint64_t mask = reserve_used;
+    /* Existing diagnostic fields expose the lower64 occupancy bits. */
+    const uint64_t mask = (uint64_t)reserve_used.words[0] |
+        ((uint64_t)reserve_used.words[1] << 32U);
     __set_PRIMASK(saved);
     return mask;
 }
 #endif
 
-/* A fixed bitmap avoids heap headers and bounds each search to 64 blocks.
- * Only the allocation start records its length; pointers never move. */
-static int reserve_find_in(size_t size, uint64_t used)
+/* Four32-bit words preserve the16KiB capacity with128-byte slots.
+ * Single-block searches use CTZ; pointers remain fixed until freed. */
+static inline unsigned reserve_bit(const ReserveBitmap *used, unsigned index)
 {
-    if (!large_slots || size == 0U || size > RESERVE_BLOCK_BYTES * RESERVE_BLOCK_COUNT) return -1;
+    return (used->words[index / 32U] >> (index % 32U)) & 1U;
+}
+static inline unsigned reserve_count_used(const ReserveBitmap *used)
+{
+    unsigned count = 0U;
+    for (unsigned i = 0; i < RESERVE_WORD_COUNT; ++i)
+        count += (unsigned)__builtin_popcount(used->words[i]);
+    return count;
+}
+static inline int reserve_equal(const ReserveBitmap *a, const ReserveBitmap *b)
+{
+    for (unsigned i = 0; i < RESERVE_WORD_COUNT; ++i)
+        if (a->words[i] != b->words[i]) return 0;
+    return 1;
+}
+static void reserve_set(ReserveBitmap *used, unsigned start, unsigned count,
+                        unsigned occupied)
+{
+    while (count != 0U) {
+        const unsigned shift = start % 32U;
+        const unsigned take = count < 32U - shift ? count : 32U - shift;
+        const uint32_t mask = (UINT32_MAX >> (32U - take)) << shift;
+        if (occupied) used->words[start / 32U] |= mask;
+        else used->words[start / 32U] &= ~mask;
+        start += take;
+        count -= take;
+    }
+}
+static unsigned reserve_length(unsigned start)
+{
+    if (!reserve_bit(&reserve_used, start)) return 0U;
+    if (start != 0U && reserve_bit(&reserve_used, start - 1U) &&
+        !reserve_bit(&reserve_ends, start - 1U)) return 0U;
+    unsigned word = start / 32U;
+    uint32_t ends = reserve_ends.words[word] & (UINT32_MAX << (start % 32U));
+    while (ends == 0U && ++word < RESERVE_WORD_COUNT)
+        ends = reserve_ends.words[word];
+    if (ends == 0U) return 0U;
+    return word * 32U + (unsigned)__builtin_ctz(ends) + 1U - start;
+}
+static int reserve_find_in(size_t size, const ReserveBitmap *used)
+{
+    if (!large_slots || size == 0U || size > LARGE_RESERVE_BYTES) return -1;
     const unsigned blocks = (size + RESERVE_BLOCK_BYTES - 1U) / RESERVE_BLOCK_BYTES;
     if (blocks == 1U) {
-        const uint64_t free = ~used;
-        const uint32_t low = (uint32_t)free, high = (uint32_t)(free >> 32U);
-        if (low) return (int)__builtin_ctz(low);
-        if (high) return 32 + (int)__builtin_ctz(high);
+        for (unsigned word = 0; word < RESERVE_WORD_COUNT; ++word) {
+            const uint32_t free = ~used->words[word];
+            if (free) return (int)(word * 32U + (unsigned)__builtin_ctz(free));
+        }
         return -1;
     }
-    const uint64_t bits = UINT64_MAX >> (RESERVE_BLOCK_COUNT - blocks);
-    for (unsigned i = 0; i + blocks <= RESERVE_BLOCK_COUNT; ++i)
-        if ((used & (bits << i)) == 0U) return (int)i;
+    unsigned run = 0U;
+    for (unsigned i = 0; i < RESERVE_BLOCK_COUNT; ++i) {
+        if (reserve_bit(used, i)) run = 0U;
+        else if (++run == blocks) return (int)(i + 1U - blocks);
+    }
     return -1;
 }
 static int reserve_find(size_t size)
 {
-    return reserve_find_in(size, reserve_used);
+    return reserve_find_in(size, &reserve_used);
 }
 static void *large_slot_allocate(size_t size)
 {
     const int index = reserve_find(size);
     if (index < 0) return NULL;
     const unsigned blocks = (size + RESERVE_BLOCK_BYTES - 1U) / RESERVE_BLOCK_BYTES;
-    reserve_used |= (UINT64_MAX >> (RESERVE_BLOCK_COUNT - blocks)) << (unsigned)index;
-    reserve_lengths[index] = blocks;
+    reserve_set(&reserve_used, (unsigned)index, blocks, 1U);
+    reserve_set(&reserve_ends, (unsigned)index + blocks - 1U, 1U, 1U);
     reserve_live_bytes += blocks * RESERVE_BLOCK_BYTES;
     ++g_gateway_large_slot_live;
     if (g_gateway_large_slot_live > g_gateway_large_slot_peak)
@@ -127,7 +179,7 @@ static void snapshot(void)
         g_telemetry_tlsf_free_bytes += LARGE_RESERVE_BYTES - reserve_live_bytes;
         unsigned run = 0;
         for (unsigned i = 0; i < RESERVE_BLOCK_COUNT; ++i) {
-            if (reserve_used & (UINT64_C(1) << i)) run = 0;
+            if (reserve_bit(&reserve_used, i)) run = 0;
             else {
                 if (run == 0U) ++g_telemetry_tlsf_free_blocks;
                 ++run;
@@ -196,7 +248,7 @@ void *telemetry_tlsf_malloc(size_t size)
         ++live_allocations;
         const int index = large_slot_index(ptr);
         g_telemetry_tlsf_live_bytes += index >= 0 ?
-            reserve_lengths[index] * RESERVE_BLOCK_BYTES : tlsf_block_size(ptr);
+            reserve_length((unsigned)index) * RESERVE_BLOCK_BYTES : tlsf_block_size(ptr);
         if (g_telemetry_tlsf_live_bytes > g_telemetry_tlsf_peak_bytes)
             g_telemetry_tlsf_peak_bytes = g_telemetry_tlsf_live_bytes;
     } else {
@@ -212,12 +264,13 @@ void telemetry_tlsf_free(void *ptr)
     if (!ptr) return;
     const uint32_t saved = __get_PRIMASK();
     __disable_irq();
-    --live_allocations;
     const int slot = large_slot_index(ptr);
+    const unsigned blocks = slot >= 0 ? reserve_length((unsigned)slot) : 0U;
+    if (slot >= 0 && blocks == 0U) { __set_PRIMASK(saved); return; }
+    --live_allocations;
     if (slot >= 0) {
-        const unsigned blocks = reserve_lengths[slot];
-        reserve_used &= ~((UINT64_MAX >> (RESERVE_BLOCK_COUNT - blocks)) << (unsigned)slot);
-        reserve_lengths[slot] = 0U;
+        reserve_set(&reserve_used, (unsigned)slot, blocks, 0U);
+        reserve_set(&reserve_ends, (unsigned)slot + blocks - 1U, 1U, 0U);
         --g_gateway_large_slot_live;
         reserve_live_bytes -= blocks * RESERVE_BLOCK_BYTES;
         g_telemetry_tlsf_live_bytes -= blocks * RESERVE_BLOCK_BYTES;
@@ -291,15 +344,14 @@ static bool admit_impl(size_t additional, size_t largest, bool cached_transit, b
                  * storage, then verify the full safety reserve remains free.
                  * No real reserve bitmap or allocation counters are changed. */
                 void *head = NULL;
-                uint64_t trial_used = reserve_used;
+                ReserveBitmap trial_used = reserve_used;
                 const int index = reserve_find(largest);
                 if (allowed) {
                     const unsigned blocks = (largest + RESERVE_BLOCK_BYTES - 1U) / RESERVE_BLOCK_BYTES;
-                    trial_used |= (UINT64_MAX >> (RESERVE_BLOCK_COUNT - blocks)) << (unsigned)index;
+                    reserve_set(&trial_used, (unsigned)index, blocks, 1U);
                 }
                 /* Probe actual work only. The safety reserve must remain free;
-                 * materializing it as 128-byte objects rounds every 128 bytes
-                 * to a 256-byte fallback slot and double-charges headroom. */
+                 * materializing it as objects would count it twice. */
                 size_t remaining = additional > largest ? additional - largest : 0U;
                 unsigned probes = 0U;
                 while (allowed && remaining != 0U && probes++ < 128U) {
@@ -314,21 +366,21 @@ static bool admit_impl(size_t additional, size_t largest, bool cached_transit, b
                          * not one large buffer. Charge each fallback block,
                          * including its padding, in the private trial bitmap.
                          * Keep the real bitmap and allocation counters intact. */
-                        const int small = reserve_find_in(chunk, trial_used);
+                        const int small = reserve_find_in(chunk, &trial_used);
                         if (small < 0) {
 #ifdef SEDS_FIRMWARE_SIM_TEST
                             reason = 5U;
 #endif
                             allowed = false; break;
                         }
-                        trial_used |= UINT64_C(1) << (unsigned)small;
+                        reserve_set(&trial_used, (unsigned)small, 1U, 1U);
                     }
                     remaining -= chunk;
                 }
                 if (remaining != 0U) allowed = false;
                 if (allowed) {
                     const size_t trial_free = tlsf_free_size(allocator) +
-                        (RESERVE_BLOCK_COUNT - (unsigned)__builtin_popcountll(trial_used)) *
+                        (RESERVE_BLOCK_COUNT - reserve_count_used(&trial_used)) *
                             RESERVE_BLOCK_BYTES;
                     if (trial_free < reserve) {
                         allowed = false;

@@ -9,6 +9,7 @@ extern volatile uint32_t g_gateway_admission_last_additional;
 extern volatile uint32_t g_gateway_admission_last_largest;
 #ifdef SEDS_FIRMWARE_SIM_TEST
 extern volatile uint32_t g_gateway_admission_last_reason;
+/* Lower64 occupancy bits; full pool counters include all128 slots. */
 uint64_t telemetry_tlsf_reserve_mask(void);
 #endif
 /* Register startup pools before the first Rust allocation. TLSF then owns

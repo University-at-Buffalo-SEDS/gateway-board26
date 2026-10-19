@@ -1,3 +1,5 @@
+#include "can_tx_queue.h"
+#include "board_health.h"
 #ifdef TELEMETRY_USE_TLSF
 #include "telemetry_tlsf.h"
 #endif
@@ -5,6 +7,7 @@
 #include "telemetry.h"
 #include "flight_state_cache.h"
 #include "sim_network_probe.h"
+#include "board_can_priority.h"
 #include "gateway_status_probe.h"
 volatile uint32_t g_gateway_protocol_ack_path[4];
 #ifdef GATEWAY_HIL_DIAGNOSTICS
@@ -83,7 +86,7 @@ static uint8_t g_can_rx_subscribed = 0U;
 static uint8_t g_board_link_rx_subscribed = 0U;
 #endif
 static int32_t g_can_side_id = -1;
-#define BOARD_CAN_MAX_FRAME_BYTES 128U
+#define BOARD_CAN_MAX_FRAME_BYTES CAN_TX_ALIGNED_FRAME_BYTES
 /* This is the receive cache for the whole shared CAN segment, not one
  * dictionary per board. Four entries churn under DAQ + valve + actuator
  * traffic, costing allocations and dropping compact frames between refreshes.
@@ -444,7 +447,25 @@ void telemetry_set_unix_time_ms(uint64_t unix_ms) {
 #endif
 }
 
+#ifdef SEDS_FIRMWARE_SIM_TEST
+/* Reuse the existing SIM-only failure snapshot until an OOM replaces it.
+ * Keep the instrumented image within the physical SRAM budget. */
+extern volatile uint32_t g_telemetry_alloc_failure_stack[128];
+#define g_gateway_memory_counters g_telemetry_alloc_failure_stack
+#endif
 void telemetry_hil_capture_requested_snapshot(void) {
+#ifdef SEDS_FIRMWARE_SIM_TEST
+  static uint32_t last_memory_snapshot;
+  const uint32_t snapshot_tick = HAL_GetTick();
+  if (g_router.r && (uint32_t)(snapshot_tick - last_memory_snapshot) >= 1000U) {
+    uint32_t counters[16];
+    telemetry_lock();
+    const int32_t count = seds_router_copy_memory_counters(g_router.r, counters, 16U);
+    telemetry_unlock();
+    if (count == 16) for (unsigned i = 0; i < 16U; ++i) g_gateway_memory_counters[i] = counters[i];
+    last_memory_snapshot = snapshot_tick;
+  }
+#endif
   const uint32_t request = g_gateway_peer_probe_request;
   const uint32_t now = HAL_GetTick();
 #if defined(SEDS_FIRMWARE_SIM_TEST) || defined(GATEWAY_HIL_DIAGNOSTICS)
@@ -540,10 +561,8 @@ static SedsResult tx_send_with_priority(const uint8_t *bytes, size_t len,
 #endif
 
   const uint32_t can_id =
-      (priority >= 200U ||
-       sim_probe_packed_data_type(bytes, len) == (uint32_t)SEDS_DT_HEARTBEAT)
-          ? 0x004U
-          : 0x104U;
+      board_can_arbitration_id(bytes, len, priority,
+          sim_probe_packed_data_type(bytes, len), (uint32_t)SEDS_DT_HEARTBEAT, 0x004U);
   status = can_bus_send_large(bytes, len, can_id);
   if (status == HAL_OK) {
     sim_probe_observe_can_tx(bytes, len);
@@ -800,6 +819,10 @@ SedsResult telemetry_announce_discovery(void) {
 }
 
 SedsResult telemetry_poll_discovery(void) {
+#ifdef TELEMETRY_ENABLED
+  if (g_router.r) board_health_poll(g_router.r);
+#endif
+
 #ifndef TELEMETRY_ENABLED
   return SEDS_OK;
 #else

@@ -48,7 +48,9 @@ static void telemetry_wait_for_activity(void) {
 #define ROUTER_TEST_THREAD_STACK_SIZE (8U * 1024U)
 #define TELEMETRY_QUEUE_SERVICE_BUDGET_MS 1U
 #define TELEMETRY_THREAD_SLEEP_TICKS 1U
-#define TELEMETRY_CAN_FRAMES_PER_SLICE 8U
+/* Drain cheap frames faster during bootstrap without extending the 2 ms
+ * slice or outrunning the bounded network handoff before dispatch. */
+#define TELEMETRY_CAN_FRAMES_PER_SLICE 16U
 #define TELEMETRY_CAN_SERVICE_BUDGET_MS 8U
 #define TELEMETRY_CAN_SLICE_BUDGET_MS 2U
 #define TELEMETRY_MAINTENANCE_PERIOD_MS 50U

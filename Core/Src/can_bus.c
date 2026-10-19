@@ -260,18 +260,25 @@ static inline int __attribute__((unused)) rb_is_empty(void) {
 
 static inline int rb_is_full(void) { return rb_next(g_rx_head) == g_rx_tail; }
 
+static inline unsigned can_rx_sender_index(uint32_t std_id) {
+  /* Bit7 separates protected metadata from urgent controls. Data uses bit8;
+   * keep unrelated legacy identifiers outside the known-peer statistics. */
+  return std_id < 0x100U ? (std_id & 0x7fU) : (std_id & 0xffU);
+}
+
+
 /* Only shed a dominant board when all usable slots are occupied. The ISR
  * never moves the tail slot: foreground may have been preempted while copying
  * it. Removing a later slot and appending the new frame preserves the order
  * of every retained frame and leaves head/tail unchanged. */
 static inline int rb_replace_dominant(uint32_t std_id, const uint8_t *data,
                                       uint8_t len) {
-  const unsigned incoming = std_id & 0xffU;
+  const unsigned incoming = can_rx_sender_index(std_id);
   if (incoming == 0U || incoming >= 8U) return 0;
   const uint16_t tail = g_rx_tail, head = g_rx_head;
   uint8_t counts[8] = {0};
   for (uint16_t i = tail; i != head; i = rb_next(i)) {
-    const unsigned peer = g_rx_ring[i].std_id & 0xffU;
+    const unsigned peer = can_rx_sender_index(g_rx_ring[i].std_id);
     if (peer > 0U && peer < 8U) ++counts[peer];
   }
   uint16_t victim = CAN_BUS_RX_RING_DEPTH;
@@ -279,7 +286,7 @@ static inline int rb_replace_dominant(uint32_t std_id, const uint8_t *data,
   const unsigned priority = std_id < 0x100U;
   unsigned largest = priority ? 0U : counts[incoming];
   for (uint16_t i = rb_next(tail); i != head; i = rb_next(i)) {
-    const unsigned peer = g_rx_ring[i].std_id & 0xffU;
+    const unsigned peer = can_rx_sender_index(g_rx_ring[i].std_id);
     /* Low arbitration IDs are reserved for priority/liveness traffic. */
     if (g_rx_ring[i].std_id >= 0x100U && peer > 0U && peer < 8U &&
         (priority || peer != incoming) && counts[peer] > largest) {
@@ -288,7 +295,7 @@ static inline int rb_replace_dominant(uint32_t std_id, const uint8_t *data,
     }
   }
   if (victim == CAN_BUS_RX_RING_DEPTH) return 0;
-  const unsigned evicted_peer = g_rx_ring[victim].std_id & 0xffU;
+  const unsigned evicted_peer = can_rx_sender_index(g_rx_ring[victim].std_id);
   uint16_t last = victim;
   while (rb_next(last) != head) {
     const uint16_t next = rb_next(last);
@@ -314,7 +321,7 @@ static inline void rb_push(uint32_t std_id, const uint8_t *data, uint8_t len) {
   if (len > 64)
     len = 64;
 
-  const unsigned sender = std_id & 0xffU;
+  const unsigned sender = can_rx_sender_index(std_id);
   const unsigned sender_known = sender > 0U && sender < 8U;
   if (sender_known) ++g_can_rx_sender_frames[sender];
   const uint16_t head = g_rx_head, tail = g_rx_tail;
@@ -857,3 +864,5 @@ void HAL_FDCAN_RxFifo1Callback(FDCAN_HandleTypeDef *hfdcan,
 
   can_bus_drain_rx_fifo(hfdcan, FDCAN_RX_FIFO1);
 }
+
+uint32_t board_health_can_rx_drops(void) { return can_bus_rx_dropped_frames(); }

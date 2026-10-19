@@ -42,7 +42,7 @@ static unsigned can_bus_rx_pending(void) { return pending; }
 static unsigned can_bus_process_rx_for(unsigned count, unsigned ms) {
     unsigned n = count < pending ? count : pending;
     pending -= n; frames += n;
-    // A bounded handoff queue can hold two eight-frame CAN slices. The old
+    // A bounded handoff queue holds sixteen packets. The old
     // backlog-dependent dispatch waits for four slices and loses packets.
     const unsigned room = 16 - network_pending;
     const unsigned accepted = n < room ? n : room;
@@ -100,7 +100,7 @@ int main(void) {
     // Dispatch after one handoff batch even while CAN still has a backlog.
     // Do not relax queue capacity or extend the worker's wall-time budget.
     assert(handoff_drops == 0);
-    assert(first_network_pending == 32);
+    assert(first_network_pending == 24);
     assert(pending == 0 && frames == 40);
     reset(0); pending=0; inject_maintenance_burst=1;
     if (!setjmp(completed)) telemetry_thread_entry(0);
@@ -109,11 +109,11 @@ int main(void) {
     if (!setjmp(completed)) telemetry_thread_entry(0);
     // A continuously replenished ring services each handoff once and yields;
     // do not repeat discovery maintenance after the bounded combined pass.
-    assert(network_calls == 5 && frames == 40 && handoff_drops == 0 && network_pending == 0);
+    assert(network_calls == 5 && frames == 80 && handoff_drops == 0 && network_pending == 0);
     assert(first_network_pending == 40);
     ticks=UINT32_MAX-3; network_calls=cycles=frames=0;
     if (!setjmp(completed)) telemetry_thread_entry(0);
-    assert(network_calls == 5 && frames == 40 && handoff_drops == 0 && network_pending == 0);
+    assert(network_calls == 5 && frames == 80 && handoff_drops == 0 && network_pending == 0);
 }
 '''
         with tempfile.TemporaryDirectory() as tmp:

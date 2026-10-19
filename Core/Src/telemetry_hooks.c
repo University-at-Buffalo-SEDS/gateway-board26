@@ -14,7 +14,8 @@ extern volatile uint32_t g_telemetry_tlsf_free_blocks;
  * explicit read-only zeroes for debugger/simulator probes without charging RAM.
  * Active TLSF failure and free-space counters remain live and writable. */
 #ifdef TELEMETRY_USE_TLSF
-#define THREADX_ONLY_PROBE const __attribute__((used, retain))
+/* Simulator link roots retain these inactive zero-valued probes under LTO. */
+#define THREADX_ONLY_PROBE const __attribute__((used))
 #else
 #define THREADX_ONLY_PROBE volatile
 #endif

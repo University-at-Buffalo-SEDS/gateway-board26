@@ -66,13 +66,61 @@ int main(int argc,char**argv){
  if(argc>1 && strcmp(argv[1],"init-failure")==0){fail_init=1;assert(!telemetry_tlsf_malloc(32));assert(g_telemetry_tlsf_init_failed);assert(!g_telemetry_tlsf_active);assert(mock_irq==0);return 0;}
  void *first=telemetry_tlsf_malloc(0);assert(first&&g_telemetry_tlsf_active);telemetry_tlsf_free(first);
  assert(!telemetry_tlsf_malloc(SIZE_MAX));
+
+
+ if(argc>1 && strcmp(argv[1],"bitmap-boundaries")==0){
+  void *held[1024]={0};unsigned n=0;
+  while(n<1024 && (held[n]=ordinary_only(112)))n++;
+  assert(n>200 && n<1024);
+  const unsigned boundaries[]={32,64,96};
+  for(unsigned j=0;j<3;j++){
+   const unsigned b=boundaries[j];
+   void *prefix=telemetry_tlsf_malloc((b-1U)*RESERVE_BLOCK_BYTES);assert(prefix);
+   void *cross=telemetry_tlsf_malloc(2U*RESERVE_BLOCK_BYTES);assert(cross);
+   assert(large_slot_index(cross)==(int)b-1 && reserve_bit(&reserve_used,b-1) && reserve_bit(&reserve_used,b));
+   memset(cross,0xa7,2U*RESERVE_BLOCK_BYTES);telemetry_tlsf_free(prefix);
+   assert(reserve_count_used(&reserve_used)==2);
+   for(unsigned i=0;i<2U*RESERVE_BLOCK_BYTES;i++)assert(((unsigned char*)cross)[i]==0xa7);
+   telemetry_tlsf_free(cross);assert(!reserve_count_used(&reserve_used) && !reserve_count_used(&reserve_ends));
+  }
+  for(unsigned i=0;i<n;i++)telemetry_tlsf_free(held[i]);
+  assert(!g_telemetry_tlsf_live_bytes);return 0;
+ }
+ if(argc>1 && strcmp(argv[1],"captured-cached-power")==0){
+  /* bay-1792372847430170569: warmed33-byte VB power report refused at
+   * additional1090/largest256/free5708, reason6. Reproduce fragmented
+   * ordinary storage and comparable5.4--5.9KiB total free space; native
+   * pointer/header alignment differs from Cortex-M. Keep the4KiB reserve. */
+  void *held[1024]={0};unsigned n=0;
+  while(n<1024 && (held[n]=ordinary_only(112))){memset(held[n],0x77,112);n++;}
+  assert(n>200 && n<1024);
+  void *retained[44];
+  for(unsigned i=0;i<44;i++){retained[i]=telemetry_tlsf_malloc(256);assert(retained[i]);memset(retained[i],i+1,256);}
+  for(unsigned i=0;i<4;i++){telemetry_tlsf_free(held[i*2]);held[i*2]=NULL;}
+  const size_t available=tlsf_free_size(allocator)+16384-reserve_live_bytes;
+  assert(available>=5400 && available<5954);
+  assert(!tlsf_can_memalign(allocator,tlsf_align_size(),128));
+  const uint32_t live=g_telemetry_tlsf_live_bytes,walks=g_telemetry_tlsf_snapshot_count;
+  const ReserveBitmap ends=reserve_ends;
+  assert(telemetry_tlsf_admit_cached_transit(1090,256));
+  assert(g_telemetry_tlsf_live_bytes==live && g_telemetry_tlsf_snapshot_count==walks && mock_irq==0 && reserve_equal(&reserve_ends,&ends));
+  void *work[8];unsigned count=0;work[count++]=telemetry_tlsf_malloc(256);assert(work[0]);
+  size_t remaining=1090-256;
+  while(remaining){size_t chunk=remaining>128?128:remaining;work[count]=telemetry_tlsf_malloc(chunk);assert(work[count++]);remaining-=chunk;}
+  assert(tlsf_free_size(allocator)+16384-reserve_live_bytes>=4096);
+  for(unsigned i=0;i<count;i++)telemetry_tlsf_free(work[i]);
+  assert(g_telemetry_tlsf_live_bytes==live && tlsf_check(allocator)==0);
+  for(unsigned i=0;i<44;i++){for(unsigned j=0;j<256;j++)assert(((unsigned char*)retained[i])[j]==i+1);telemetry_tlsf_free(retained[i]);}
+  for(unsigned i=0;i<n;i++){if(held[i])assert(((unsigned char*)held[i])[0]==0x77);telemetry_tlsf_free(held[i]);}
+  assert(!g_telemetry_tlsf_live_bytes && !reserve_live_bytes);return 0;
+ }
  if(argc>1 && strcmp(argv[1],"small-protected-reserve")==0){
   void *ordinary[1024]={0};unsigned n=0;
   while(n<1024 && (ordinary[n]=ordinary_only(128))){n++;}
   assert(n>200 && n<1024);
   void *slots[48];
   for(unsigned i=0;i<48;i++){slots[i]=telemetry_tlsf_malloc(256);assert(slots[i]);}
-  const uint64_t used=reserve_used;
+  const ReserveBitmap used=reserve_used;
   const uint32_t live=g_telemetry_tlsf_live_bytes;
   assert(!telemetry_tlsf_admit(2195,81));
   assert(telemetry_tlsf_admit_small_protected(2195,81));
@@ -81,14 +129,14 @@ int main(int argc,char**argv){
   assert(!telemetry_tlsf_admit_can_control(0));
   assert(!telemetry_tlsf_admit_can_control(161));
   assert(!telemetry_tlsf_admit_small_protected(4096,81));
-  assert(reserve_used==used && g_telemetry_tlsf_live_bytes==live && mock_irq==0);
+  assert(reserve_equal(&reserve_used,&used) && g_telemetry_tlsf_live_bytes==live && mock_irq==0);
   void *work[16];unsigned count=0;
   work[count++]=telemetry_tlsf_malloc(1024);assert(work[0]);
   size_t remaining=2195-1024;
   while(remaining){size_t chunk=remaining>128?128:remaining;work[count]=telemetry_tlsf_malloc(chunk);assert(work[count++]);remaining-=chunk;}
   assert(tlsf_free_size(allocator)+16384-reserve_live_bytes>=512);
   for(unsigned i=0;i<count;i++)telemetry_tlsf_free(work[i]);
-  assert(reserve_used==used && g_telemetry_tlsf_live_bytes==live && tlsf_check(allocator)==0);
+  assert(reserve_equal(&reserve_used,&used) && g_telemetry_tlsf_live_bytes==live && tlsf_check(allocator)==0);
   /* Captured starvation: decoding has finished, but only ~2.4 KiB remains.
    * A 75-byte CAN copy needs its original copy estimate, not another decode. */
   void *occupied_copy_headroom[7];
@@ -115,11 +163,11 @@ int main(int argc,char**argv){
   assert(n>200 && n<1024);
   void *slots[27];
   for(unsigned i=0;i<27;i++){slots[i]=telemetry_tlsf_malloc(256);assert(slots[i]);}
-  assert(reserve_used==UINT64_C(0x07ffffff));
-  const uint64_t used=reserve_used;
+  assert(reserve_count_used(&reserve_used)==27U * (256U / RESERVE_BLOCK_BYTES));
+  const ReserveBitmap used=reserve_used;
   const uint32_t live=g_telemetry_tlsf_live_bytes;
   assert(telemetry_tlsf_admit(2195,1024));
-  assert(reserve_used==used && g_telemetry_tlsf_live_bytes==live && mock_irq==0);
+  assert(reserve_equal(&reserve_used,&used) && g_telemetry_tlsf_live_bytes==live && mock_irq==0);
   void *work[16];unsigned count=0;
   work[count++]=telemetry_tlsf_malloc(1024);assert(work[0]);
   size_t remaining=2195-1024;
@@ -128,7 +176,7 @@ int main(int argc,char**argv){
   assert(free_after>=4096); // Keep the complete safety reserve after real work.
   assert(!telemetry_tlsf_admit(8192,1024));
   for(unsigned i=0;i<count;i++)telemetry_tlsf_free(work[i]);
-  assert(reserve_used==used && g_telemetry_tlsf_live_bytes==live && tlsf_check(allocator)==0);
+  assert(reserve_equal(&reserve_used,&used) && g_telemetry_tlsf_live_bytes==live && tlsf_check(allocator)==0);
   for(unsigned i=0;i<n;i++){assert(((unsigned char*)ordinary[i])[0]==0x77);telemetry_tlsf_free(ordinary[i]);}
   for(unsigned i=0;i<27;i++)telemetry_tlsf_free(slots[i]);
   assert(!g_telemetry_tlsf_live_bytes);return 0;
@@ -144,21 +192,21 @@ int main(int argc,char**argv){
   for(unsigned i=0;i<4;i++){telemetry_tlsf_free(slots[i]);slots[i]=NULL;}
   for(unsigned i=6;i<64;i+=2){telemetry_tlsf_free(slots[i]);slots[i]=NULL;}
   for(unsigned i=0;i<20;i++){unsigned index=10*i;telemetry_tlsf_free(ordinary[index]);ordinary[index]=NULL;}
-  const uint64_t used=reserve_used;
+  const ReserveBitmap used=reserve_used;
   const uint32_t live=g_telemetry_tlsf_live_bytes;
   const size_t available=tlsf_free_size(allocator)+16384-reserve_live_bytes;
   assert(available>2258+4096 && !tlsf_can_memalign(allocator,tlsf_align_size(),1024));
-  int large=reserve_find_in(1024,used);assert(large>=0);
-  uint64_t after_large=used | (UINT64_C(15) << (unsigned)large);
-  assert(reserve_find_in(5330,after_large)<0);
+  int large=reserve_find_in(1024,&used);assert(large>=0);
+  ReserveBitmap after_large=used;reserve_set(&after_large,(unsigned)large,1024U/RESERVE_BLOCK_BYTES,1U);
+  assert(reserve_find_in(5330,&after_large)<0);
   assert(telemetry_tlsf_admit(2258,1024));
-  assert(reserve_used==used && g_telemetry_tlsf_live_bytes==live && mock_irq==0);
+  assert(reserve_equal(&reserve_used,&used) && g_telemetry_tlsf_live_bytes==live && mock_irq==0);
   void *scratch[64];unsigned count=0;
   scratch[count++]=telemetry_tlsf_malloc(1024);assert(scratch[0]);
   size_t remaining=5330;
   while(remaining){size_t chunk=remaining>128?128:remaining;scratch[count]=telemetry_tlsf_malloc(chunk);assert(scratch[count++]);remaining-=chunk;}
   for(unsigned i=0;i<count;i++)telemetry_tlsf_free(scratch[i]);
-  assert(reserve_used==used && g_telemetry_tlsf_live_bytes==live && tlsf_check(allocator)==0);
+  assert(reserve_equal(&reserve_used,&used) && g_telemetry_tlsf_live_bytes==live && tlsf_check(allocator)==0);
   for(unsigned i=0;i<n;i++)if(ordinary[i]){assert(((unsigned char*)ordinary[i])[0]==0x77);telemetry_tlsf_free(ordinary[i]);}
   for(unsigned i=0;i<64;i++)telemetry_tlsf_free(slots[i]);
   assert(!g_telemetry_tlsf_live_bytes);return 0;
@@ -199,18 +247,18 @@ int main(int argc,char**argv){
   // case. The ordinary heap is fragmented below 676 bytes, so this allocation
   // necessarily exercises the bitmap fallback rather than a TLSF block.
   void *extra_pinned=telemetry_tlsf_malloc(8192);assert(extra_pinned);
-  assert(large_slot_index(extra_pinned)==0 && reserve_lengths[0]==32);
+  assert(large_slot_index(extra_pinned)==0 && reserve_length(0)==8192U/RESERVE_BLOCK_BYTES);
 
   // The ordinary fragmented heap cannot satisfy even the captured 676-byte request.
   void *ordinary=tlsf_memalign(allocator,8,676);assert(!ordinary);
   // Discovery must use fragmented small blocks plus its large fallback buffer.
-  const uint64_t before_bitmap=reserve_used; const uint32_t before_live=g_telemetry_tlsf_live_bytes;
+  const ReserveBitmap before_bitmap=reserve_used; const uint32_t before_live=g_telemetry_tlsf_live_bytes;
   assert(telemetry_tlsf_admit(8192,2048));
-  assert(reserve_used==before_bitmap&&g_telemetry_tlsf_live_bytes==before_live);
+  assert(reserve_equal(&reserve_used,&before_bitmap)&&g_telemetry_tlsf_live_bytes==before_live);
   // Hardware: a retained 2816-byte fallback block must not strand 2 KiB decode.
   void *retained=telemetry_tlsf_malloc(2816);assert(retained);
   assert(reserve_live_bytes==8192+2816);
-  const uint64_t pinned_bitmap=reserve_used; const uint32_t pinned_live=g_telemetry_tlsf_live_bytes;
+  const ReserveBitmap pinned_bitmap=reserve_used; const uint32_t pinned_live=g_telemetry_tlsf_live_bytes;
   // Consume ordinary fragments until the operation needs both pools.
   void *small[2048];unsigned small_count=0;
   while(small_count<2048 && (small[small_count]=ordinary_only(32)))small_count++;
@@ -220,7 +268,7 @@ int main(int argc,char**argv){
   assert(!telemetry_tlsf_admit(4096,2048));
   for(unsigned i=0;i<small_count;i++)telemetry_tlsf_free(small[i]);
   assert(telemetry_tlsf_admit(8192,2048));
-  assert(reserve_used==pinned_bitmap&&g_telemetry_tlsf_live_bytes==pinned_live);
+  assert(reserve_equal(&reserve_used,&pinned_bitmap)&&g_telemetry_tlsf_live_bytes==pinned_live);
   void *scratch=telemetry_tlsf_malloc(2048);assert(scratch);
   telemetry_tlsf_free(scratch);telemetry_tlsf_free(retained);
   assert(telemetry_tlsf_admit(4096,2048));
@@ -248,15 +296,15 @@ int main(int argc,char**argv){
   for(unsigned j=0;j<4096;j++)assert(((unsigned char*)nested)[j]==0x7c);
   telemetry_tlsf_free(decode);telemetry_tlsf_free(nested);
   void *whole=telemetry_tlsf_malloc(8192);
-  assert(whole&&large_slot_index(whole)==32&&reserve_lengths[32]==32);
+  assert(whole&&large_slot_index(whole)==8192U/RESERVE_BLOCK_BYTES&&reserve_length(8192U/RESERVE_BLOCK_BYTES)==8192U/RESERVE_BLOCK_BYTES);
   memset(whole,0x3e,8192);telemetry_tlsf_free(whole);
   telemetry_tlsf_free(extra_pinned);
-  assert(!reserve_used&&!reserve_live_bytes);
-  // All 64 bits, including bit 63 and the zero-shift whole-pool mask.
+  assert(reserve_count_used(&reserve_used)==0&&!reserve_count_used(&reserve_ends)&&!reserve_live_bytes);
+  // All128 bits, including bit127 and allocations crossing32-bit words.
   whole=telemetry_tlsf_malloc(16384);assert(whole);
-  assert(large_slot_index(whole)==0 && reserve_lengths[0]==64 && reserve_used==UINT64_MAX);
+  assert(large_slot_index(whole)==0 && reserve_length(0)==RESERVE_BLOCK_COUNT && reserve_count_used(&reserve_used)==RESERVE_BLOCK_COUNT);
   memset(whole,0x5e,16384);telemetry_tlsf_free(whole);
-  assert(!reserve_used&&!reserve_live_bytes);
+  assert(reserve_count_used(&reserve_used)==0&&!reserve_count_used(&reserve_ends)&&!reserve_live_bytes);
   for(unsigned i=0;i<count;i++){
    for(unsigned j=0;j<768;j++)assert(((unsigned char*)keepers[i])[j]==0x5a);
    telemetry_tlsf_free(keepers[i]);
@@ -313,6 +361,8 @@ int main(int argc,char**argv){
             exe=str(p/'test')
             subprocess.run(['cc','-std=c11','-g','-fsanitize=address,undefined','-I',tmp,'-I',str(ROOT/'Core/Inc'),'-I',str(ROOT/'Core/Src'),'-I',str(ROOT/'third_party/tlsf'),str(p/'test.c'),str(ROOT/'third_party/tlsf/tlsf.c'),'-o',exe],check=True)
             subprocess.run([exe],check=True)
+            subprocess.run([exe,'captured-cached-power'],check=True)
+            subprocess.run([exe,'bitmap-boundaries'],check=True)
             subprocess.run([exe,'init-failure'],check=True)
             subprocess.run([exe,'fragmentation'],check=True)
             subprocess.run([exe,'small-object-accounting'],check=True)

@@ -9,7 +9,7 @@
 #define CAN_TX_MAX_PENDING 48U
 #define CAN_TX_MAX_AGE_MS 1000U
 #define CAN_TX_PUMP_FRAMES 3U
-#define CAN_TX_FRAGMENT_BYTES 55U
+#define CAN_TX_FRAGMENT_BYTES CAN_TX_FRAGMENT_PAYLOAD_BYTES
 
 /* These hooks are foreground-only and preserve allocator emergency headroom. */
 extern void *telemetry_can_tx_allocate_priority(size_t bytes, uint8_t protected_control);
@@ -37,6 +37,17 @@ static void unlock(uint32_t saved) { __set_PRIMASK(saved); }
 static size_t charge(size_t len) {
     /* Include alignment and conservative allocator metadata in the byte cap. */
     return ((sizeof(can_tx_packet) + len + 7U) & ~(size_t)7U) + 16U;
+}
+/* Metadata and receipts retain admission capacity when ordinary telemetry
+ * fills its share. Keep all SDT metadata/data in original order; canonical
+ * receipts may interrupt bulk without invalidating dictionary/chunk order. */
+static int queue_full(size_t cost, uint32_t id) {
+    const unsigned urgent = id < 0x80U;
+    const unsigned metadata = id < 0x100U;
+    const unsigned count_limit = CAN_TX_MAX_PENDING - (urgent ? 0U : metadata ? 4U : 12U);
+    const size_t byte_limit = CAN_TX_QUEUE_BUDGET - (urgent ? 0U : metadata ? 512U : 1536U);
+    return g_can_tx_pending >= count_limit || g_can_tx_queue_bytes > byte_limit ||
+        cost > byte_limit - g_can_tx_queue_bytes;
 }
 static void retire_head(void) {
     can_tx_packet *done = head;
@@ -102,11 +113,11 @@ void can_tx_queue_service(void) {
 
 HAL_StatusTypeDef can_tx_queue_submit(const uint8_t *data, size_t len, uint32_t id) {
     if (!data || !len || len > CAN_TX_MAX_PACKET) return HAL_ERROR;
+    id &= 0x7ffU;
     can_tx_queue_service();
     const size_t cost = charge(len);
     uint32_t saved = lock();
-    int full = g_can_tx_pending >= CAN_TX_MAX_PENDING ||
-        cost > CAN_TX_QUEUE_BUDGET - g_can_tx_queue_bytes;
+    int full = queue_full(cost, id);
     if (full) ++g_can_tx_rejected;
     unlock(saved);
     if (full) return HAL_BUSY;
@@ -123,8 +134,7 @@ HAL_StatusTypeDef can_tx_queue_submit(const uint8_t *data, size_t len, uint32_t 
     memcpy(packet->data, data, len);
     saved = lock();
     /* Another foreground sender may have filled the queue during allocation. */
-    full = g_can_tx_pending >= CAN_TX_MAX_PENDING ||
-        cost > CAN_TX_QUEUE_BUDGET - g_can_tx_queue_bytes;
+    full = queue_full(cost, id);
     if (full) {
         ++g_can_tx_rejected;
         unlock(saved);
@@ -132,8 +142,16 @@ HAL_StatusTypeDef can_tx_queue_submit(const uint8_t *data, size_t len, uint32_t 
         return HAL_BUSY;
     }
     packet->seq = next_seq++;
-    if (tail) tail->next = packet; else head = packet;
-    tail = packet;
+    if (id < 0x80U) {
+        can_tx_packet **at = &head;
+        while (*at && (*at)->id < 0x80U) at = &(*at)->next;
+        packet->next = *at;
+        *at = packet;
+        if (packet->next == NULL) tail = packet;
+    } else {
+        if (tail) tail->next = packet; else head = packet;
+        tail = packet;
+    }
     ++g_can_tx_pending;
     g_can_tx_queue_bytes += cost;
     if (g_can_tx_pending > g_can_tx_high_water) g_can_tx_high_water = g_can_tx_pending;

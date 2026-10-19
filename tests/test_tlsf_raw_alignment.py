@@ -14,7 +14,7 @@ class RawTlsfAlignmentTests(unittest.TestCase):
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
-#define RESERVE_BLOCK_BYTES 256U
+#define RESERVE_BLOCK_BYTES 128U
 static unsigned irq, allocations;
 static uintptr_t arena[256];
 static void *allocator;
@@ -32,7 +32,9 @@ static size_t tlsf_block_size(void *ptr){assert(ptr==raw);return 1024;}
 static void snapshot(void){}
 static __attribute__((unused)) void *large_slot_allocate(size_t size){(void)size;return NULL;}
 static __attribute__((unused)) int large_slot_index(void *ptr){(void)ptr;return -1;}
-static __attribute__((unused)) unsigned reserve_lengths[32];
+static __attribute__((unused)) unsigned reserve_length(unsigned index){
+ (void)index;assert(!"ordinary-only alignment fixture used the fallback");return 0;
+}
 '''
         main = r'''
 int main(void){

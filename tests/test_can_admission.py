@@ -130,6 +130,17 @@ int main(void) {
  for(unsigned i=0;i<39;i++) {assert(rb_pop(&power));assert(power.data[2]==111);}
  for(unsigned i=0;i<8;i++) {assert(rb_pop(&power));assert(power.data[2]==104);}
  assert(!rb_pop(&power));
+ // Protected metadata uses its own arbitration band while retaining the
+ // same peer accounting and full-ring displacement of ordinary telemetry.
+ const unsigned old_schema_drops=g_can_rx_sender_dropped[7];
+ for(unsigned i=0;i<47;i++) rb_push(0x106,compact,16);
+ rb_push(0x087,full,64);
+ unsigned schemas=0,ordinary=0;
+ while(rb_pop(&power)) {if(power.std_id==0x087)schemas++;else ordinary++;}
+ assert(schemas==1 && ordinary==46);
+ assert(g_can_rx_sender_dropped[7]==old_schema_drops);
+ assert(can_rx_sender_index(0x087)==7 && can_rx_sender_index(0x107)==7);
+ assert(can_rx_sender_index(0x181)==129); // unrelated old test traffic stays unknown
  // Empty and occupied ring consumption must restore the caller's IRQ mask.
  assert(!irq); irq=1; assert(!rb_pop(&power) && irq);
  rb_push(0x006,battery,16); assert(rb_pop(&power) && irq); irq=0;

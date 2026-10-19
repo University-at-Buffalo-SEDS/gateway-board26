@@ -65,6 +65,17 @@ int main(void){
  }
  assert(wire[0][6]==1 && wire[1][6]==0 && wire[2][6]==2);
  can_tx_queue_service();assert(frees==1 && !g_can_tx_queue_bytes);
+ // The SDK's outbound chunk cap fills exactly two physical frames. Keep
+ // the preceding legacy128-byte case and the full1..128 receive sweep.
+ assert(CAN_TX_ALIGNED_FRAME_BYTES==110 && CAN_TX_FRAGMENT_PAYLOAD_BYTES==55);
+ unsigned aligned_first=count;free_slots=3;
+ assert(can_tx_queue_submit(data,CAN_TX_ALIGNED_FRAME_BYTES,0x105)==HAL_OK);
+ assert(count==aligned_first+2 && !g_can_tx_pending);
+ for(unsigned f=aligned_first;f<count;f++){
+  assert(wire[f][5]==2 && wire[f][7]==110 && wire[f][8]==0);
+  for(unsigned j=0;j<55;j++)assert(wire[f][9+j]==99);
+ }
+ can_tx_queue_service();assert(allocations==frees && !g_can_tx_queue_bytes);
  // Hard byte/count limit: repeated refusal cannot leak an allocation.
  free_slots=0;unsigned accepted=0;
  while(can_tx_queue_submit(data,128,0x104)==HAL_OK)accepted++;
@@ -87,6 +98,24 @@ int main(void){
  // Priority identity survives the copy boundary; bulk cannot borrow it.
  free_slots=3;assert(can_tx_queue_submit(data,59,0x004)==HAL_OK);assert(last_protected);
  free_slots=3;assert(can_tx_queue_submit(data,59,0x104)==HAL_OK);assert(!last_protected);
+ // Saturated ordinary traffic must retain metadata and receipt capacity.
+ // A canonical receipt may interrupt a partially sent bulk packet; the
+ // original packet then resumes at the same fragment/sequence, once only.
+ unsigned source=wire[0][2], data_id=0x100|source, meta_id=0x80|source;
+ unsigned first=count;free_slots=1;
+ assert(can_tx_queue_submit(data,128,data_id)==HAL_OK);
+ assert(count==first+1 && wire[first][4]==0);
+ free_slots=0;unsigned bulk=0,metadata=0;
+ while(can_tx_queue_submit(data,128,data_id)==HAL_OK)bulk++;
+ while(can_tx_queue_submit(data,128,meta_id)==HAL_OK)metadata++;
+ assert(bulk>0 && metadata>0);
+ assert(can_tx_queue_submit(data,20,source)==HAL_OK);
+ free_slots=1;interrupt();
+ assert(count==first+2 && ids[first+1]==source && wire[first+1][5]==1);
+ free_slots=3;interrupt();
+ assert(ids[first+2]==data_id && wire[first+2][3]==wire[first][3] && wire[first+2][4]==1);
+ assert(ids[first+3]==data_id && wire[first+3][3]==wire[first][3] && wire[first+3][4]==2);
+ drain();assert(!g_can_tx_queue_bytes && allocations==frees);
  // Repeated small packets exercise sequence and queue reuse/wrap.
  for(unsigned i=0;i<300;i++){free_slots=3;assert(can_tx_queue_submit(data,1,0)==HAL_OK);}
  assert(allocations==frees);

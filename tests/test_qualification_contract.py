@@ -123,7 +123,7 @@ class QualificationContractTests(unittest.TestCase):
         self.assertIn("can_tx_queue_submit", can_bus)
         self.assertNotIn("can_bus_wait_for_tx_slot", can_bus)
         self.assertNotIn("< (uint32_t)frag_cnt", can_bus)
-        self.assertIn("BOARD_CAN_MAX_FRAME_BYTES 128U", telemetry)
+        self.assertIn("BOARD_CAN_MAX_FRAME_BYTES CAN_TX_ALIGNED_FRAME_BYTES", telemetry)
         self.assertIn('SEDSNET_MAX_QUEUE_BUDGET "16384"', cmake)
         self.assertIn('SEDSNET_ENV_STARTING_QUEUE_SIZE "2048"', cmake)
         self.assertIn('SEDSNET_ENV_QUEUE_GROW_STEP "1.0"', cmake)
