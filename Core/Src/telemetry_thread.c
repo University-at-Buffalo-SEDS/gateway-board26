@@ -66,7 +66,12 @@ static void service_record(unsigned phase, uint32_t start)
     g_gateway_service_ms[phase] += elapsed;
     if (elapsed > g_gateway_service_max_ms[phase]) g_gateway_service_max_ms[phase] = elapsed;
 }
+#ifdef SEDS_FIRMWARE_SIM_TEST
+volatile uint32_t g_sim_gateway_service_active = 7U; /* startup */
+#define SERVICE(phase, call) do { g_sim_gateway_service_active = (phase); uint32_t started = HAL_GetTick(); call; service_record(phase, started); g_sim_gateway_service_active = 7U; } while (0)
+#else
 #define SERVICE(phase, call) do { uint32_t started = HAL_GetTick(); call; service_record(phase, started); } while (0)
+#endif
 
 
 static void sample_telemetry_stack(void)

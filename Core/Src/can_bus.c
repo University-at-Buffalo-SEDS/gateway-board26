@@ -184,6 +184,12 @@ typedef struct {
 static volatile uint16_t g_rx_head = 0;
 static volatile uint16_t g_rx_tail = 0;
 static volatile uint32_t g_rx_dropped_frames = 0;
+#ifdef SEDS_FIRMWARE_SIM_TEST
+extern volatile uint32_t g_sim_gateway_service_active;
+volatile uint32_t g_sim_can_first_drop_tick;
+volatile uint32_t g_sim_can_first_drop_phase;
+#endif
+
 volatile uint32_t g_fdcan_rx_count = 0;
 volatile uint32_t g_can_rx_bulk_dropped = 0;
 volatile uint32_t g_can_rx_peer_dropped = 0;
@@ -254,6 +260,17 @@ static inline uint16_t rb_next(uint16_t v) {
   return v;
 }
 
+#ifdef SEDS_FIRMWARE_SIM_TEST
+static inline void record_first_rx_drop(void) {
+  if (g_rx_dropped_frames == 0U) {
+    g_sim_can_first_drop_tick = HAL_GetTick();
+    g_sim_can_first_drop_phase = g_sim_gateway_service_active;
+  }
+}
+#else
+#define record_first_rx_drop() ((void)0)
+#endif
+
 static inline int __attribute__((unused)) rb_is_empty(void) {
   return g_rx_head == g_rx_tail;
 }
@@ -308,6 +325,7 @@ static inline int rb_replace_dominant(uint32_t std_id, const uint8_t *data,
   __DMB();
   ++g_can_rx_sender_dropped[evicted_peer];
   ++g_can_rx_peer_dropped;
+  record_first_rx_drop();
   ++g_rx_dropped_frames;
   return 1;
 }
@@ -335,6 +353,7 @@ static inline void rb_push(uint32_t std_id, const uint8_t *data, uint8_t len) {
      * the protected low CAN ID and bypass this telemetry-only shedding. */
     if (sender_known) ++g_can_rx_sender_dropped[sender];
     g_can_rx_bulk_dropped++;
+    record_first_rx_drop();
     g_rx_dropped_frames++;
     return;
   }
@@ -342,6 +361,7 @@ static inline void rb_push(uint32_t std_id, const uint8_t *data, uint8_t len) {
   if (rb_is_full()) {
     if (rb_replace_dominant(std_id, data, len)) return;
     if (sender_known) ++g_can_rx_sender_dropped[sender];
+    record_first_rx_drop();
     g_rx_dropped_frames++;
     return;
   }

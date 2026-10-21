@@ -463,6 +463,13 @@ void telemetry_hil_capture_requested_snapshot(void) {
     const int32_t count = seds_router_copy_memory_counters(g_router.r, counters, 16U);
     telemetry_unlock();
     if (count == 16) for (unsigned i = 0; i < 16U; ++i) g_gateway_memory_counters[i] = counters[i];
+    /* Borrow-only metadata query: distinguish a refused remote priority merge
+     * from a tight queue/fragment budget without another diagnostic buffer. */
+    SedsDataTypeInfo gps_info = {0};
+    const SedsResult gps_result = seds_dtype_get_info(
+        (uint32_t)SEDS_DT_GPS_DATA, NULL, 0U, &gps_info);
+    g_gateway_memory_counters[16] = gps_info.priority;
+    g_gateway_memory_counters[17] = gps_result == SEDS_OK && gps_info.exists;
     last_memory_snapshot = snapshot_tick;
   }
 #endif
