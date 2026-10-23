@@ -64,7 +64,12 @@ int main(int argc,char**argv){
  (void)argv;TX_BYTE_POOL pools[3];
  for(unsigned i=0;i<3;i++){pools[i]=(TX_BYTE_POOL){(unsigned char*)arenas[i],0,sizeof(arenas[i])};telemetry_tlsf_register_pool(&pools[i]);}
  if(argc>1 && strcmp(argv[1],"init-failure")==0){fail_init=1;assert(!telemetry_tlsf_malloc(32));assert(g_telemetry_tlsf_init_failed);assert(!g_telemetry_tlsf_active);assert(mock_irq==0);return 0;}
- void *first=telemetry_tlsf_malloc(0);assert(first&&g_telemetry_tlsf_active);telemetry_tlsf_free(first);
+ assert(telemetry_tlsf_available_bytes()==0 && mock_irq==0);
+ void *first=telemetry_tlsf_malloc(0);assert(first&&g_telemetry_tlsf_active);
+ const size_t held_free=telemetry_tlsf_available_bytes();telemetry_tlsf_free(first);
+ const size_t released_free=telemetry_tlsf_available_bytes();assert(released_free>held_free && mock_irq==0);
+ const unsigned snapshots=g_telemetry_tlsf_snapshot_count;
+ assert(telemetry_tlsf_available_bytes()==released_free && g_telemetry_tlsf_snapshot_count==snapshots);
  assert(!telemetry_tlsf_malloc(SIZE_MAX));
 
 

@@ -1,3 +1,4 @@
+#include "board_telemetry_mutex.h"
 // telemetry_hooks_threadx.c
 #include "tx_api.h"
 #include <stddef.h>
@@ -25,6 +26,7 @@ static TX_BYTE_POOL *rust_byte_pool_external = NULL;
 static TX_BYTE_POOL *rust_emergency_byte_pool_external = NULL;
 #endif
 static TX_MUTEX g_telemetry_mutex;
+static BoardTelemetryMutex g_telemetry_owner;
 static UINT g_telemetry_mutex_ready = 0U;
 volatile uint32_t g_telemetry_lock_get_fail = 0U;
 volatile uint32_t g_telemetry_lock_put_fail = 0U;
@@ -191,7 +193,7 @@ void telemetry_init_lock(void)
 }
 void telemetry_lock(void)
 {
-    if (g_telemetry_mutex_ready == 0U)
+    if (g_telemetry_mutex_ready == 0U || __get_IPSR() != 0U)
     {
         return;
     }
@@ -203,7 +205,7 @@ void telemetry_lock(void)
         return;
     }
 
-    UINT st = tx_mutex_get(&g_telemetry_mutex, TX_WAIT_FOREVER);
+    UINT st = board_telemetry_mutex_get(&g_telemetry_mutex, &g_telemetry_owner, self);
     if (st != TX_SUCCESS)
     {
         g_telemetry_lock_get_fail++;
@@ -212,7 +214,7 @@ void telemetry_lock(void)
 
 void telemetry_unlock(void)
 {
-    if (g_telemetry_mutex_ready == 0U)
+    if (g_telemetry_mutex_ready == 0U || __get_IPSR() != 0U)
     {
         return;
     }
@@ -224,7 +226,7 @@ void telemetry_unlock(void)
         return;
     }
 
-    UINT st = tx_mutex_put(&g_telemetry_mutex);
+    UINT st = board_telemetry_mutex_put(&g_telemetry_mutex, &g_telemetry_owner, self);
     if (st != TX_SUCCESS)
     {
         g_telemetry_lock_put_fail++;

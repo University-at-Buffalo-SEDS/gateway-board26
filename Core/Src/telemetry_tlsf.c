@@ -289,6 +289,16 @@ void telemetry_tlsf_sample(void)
     __set_PRIMASK(saved);
 }
 
+size_t telemetry_tlsf_available_bytes(void)
+{
+    const uint32_t saved = __get_PRIMASK();
+    __disable_irq();
+    const size_t available = g_telemetry_tlsf_active ? tlsf_free_size(allocator) +
+        RESERVE_BLOCK_BYTES * RESERVE_BLOCK_COUNT - reserve_live_bytes : 0U;
+    __set_PRIMASK(saved);
+    return available;
+}
+
 /* Keep admission bounded even with a fragmented heap. The accounting below
  * conservatively includes metadata for allocated and free blocks. Checking an
  * actual aligned scratch allocation uses TLSF's bitmap lookup and bounded

@@ -700,6 +700,19 @@ void rx_asynchronous(const uint8_t *bytes, size_t len) {
     return;
   }
 
+#ifdef TELEMETRY_USE_TLSF
+  /* Drain already-owned work before copying another completed CAN packet.
+   * A captured startup refusal had5572 bytes free for1526 bytes of work plus
+   * the unchanged4096-byte reserve. Prefer releasing completed UART DMA first;
+   * if needed, one bounded queue pass frees old payloads. The incoming frame
+   * is handed off once below, never retried after partial side decoding. */
+  if (telemetry_tlsf_available_bytes() < 6144U) {
+    telemetry_uart_process();
+    if (telemetry_tlsf_available_bytes() < 6144U)
+      (void)process_all_queues_timeout(1U);
+  }
+#endif
+
   const size_t admission_before = seds_memory_admission_rejected();
 
   /* Foreground reassembly hands ownership to the bounded network RX queue.
