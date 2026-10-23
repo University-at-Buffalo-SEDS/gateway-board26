@@ -27,18 +27,22 @@
 #ifdef TELEMETRY_BOARD_LINK_UART
 #include "board_link_uart.h"
 #endif
+#ifdef TELEMETRY_ENABLED
 #include "sedsnet_config.h"
 #include "telemetry.h"
 #include "telemetry_uart.h"
+#endif
 #include "GB-Threads.h"
 #include "tx_api.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+#ifdef TELEMETRY_ENABLED
 extern void telemetry_set_byte_pool(TX_BYTE_POOL *pool);
 extern void telemetry_set_emergency_byte_pool(TX_BYTE_POOL *pool);
 extern void telemetry_init_lock(void);
+#endif
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -53,8 +57,10 @@ extern void telemetry_init_lock(void);
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN PV */
+#ifdef TELEMETRY_ENABLED
 static TX_BYTE_POOL sedsnet_emergency_byte_pool;
 static UCHAR sedsnet_emergency_pool_memory[GATEWAY_SEDSNET_EMERGENCY_POOL_SIZE];
+#endif
 
 /* USER CODE END PV */
 
@@ -77,6 +83,7 @@ UINT App_ThreadX_Init(VOID *memory_ptr)
   /* USER CODE END App_ThreadX_MEM_POOL */
 
   /* USER CODE BEGIN App_ThreadX_Init */
+#ifdef TELEMETRY_ENABLED
   telemetry_set_byte_pool(byte_pool);
   if (tx_byte_pool_create(&sedsnet_emergency_byte_pool, "SEDSNet emergency",
                           sedsnet_emergency_pool_memory,
@@ -97,6 +104,8 @@ UINT App_ThreadX_Init(VOID *memory_ptr)
   {
     Error_Handler();
   }
+
+#endif
 
   ret = create_data_acq_thread(byte_pool);
   if (ret != TX_SUCCESS)

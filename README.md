@@ -24,6 +24,11 @@ LaunchCore derives linker scripts and the boot/OTA layout from
 ./build.py test --all --release --ultra-soak
 ```
 
+`./build.py build --release --no-telemetry` builds without fetching or linking
+SEDSnet. Local LTC2990 acquisition and persistent flight-state restore remain
+available; the watchdog monitors the acquisition worker. CAN/UART network
+forwarding, discovery, network reports and OTA streams are disabled.
+
 On Docker hosts that cannot create bridge interfaces (including the Jupiter
 validation host), prefix the command with
 `SEDS_FIRMWARE_SIM_DOCKER_NETWORK=host`. The linked test requires GroundStation

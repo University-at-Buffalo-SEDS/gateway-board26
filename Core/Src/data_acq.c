@@ -2,7 +2,10 @@
 #include "GB-Threads.h"
 #include "ltc2990.h"
 #include "main.h"
+#ifdef TELEMETRY_ENABLED
 #include "telemetry.h"
+#endif
+#include "board_watchdog.h"
 #include "tx_api.h"
 #include <stdint.h>
 
@@ -63,7 +66,9 @@ static void data_acq_ltc2990_init(void)
             ? 1U
             : 0U;
     if (ltc2990_voltage_ready == 0U) {
+#ifdef TELEMETRY_ENABLED
         (void)log_error_asynchronous("LTC2990 voltage init failed");
+#endif
     }
 
     ltc2990_current_ready =
@@ -71,7 +76,9 @@ static void data_acq_ltc2990_init(void)
             ? 1U
             : 0U;
     if (ltc2990_current_ready == 0U) {
+#ifdef TELEMETRY_ENABLED
         (void)log_error_asynchronous("LTC2990 current init failed");
+#endif
     }
 }
 
@@ -102,6 +109,7 @@ void data_acq_thread_entry(ULONG initial_input)
             if (power_i2c_recover()) data_acq_ltc2990_init();
         }
         data_acq_report_power();
+        board_watchdog_progress(BOARD_WATCHDOG_ACQUISITION);
         // HAL_GPIO_TogglePin(GREEN_LED_GPIO_Port, GREEN_LED_Pin);
         tx_thread_sleep(DATA_ACQ_REPORT_PERIOD_TICKS);
     }

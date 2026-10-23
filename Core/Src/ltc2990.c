@@ -1,7 +1,9 @@
 #include "ltc2990.h"
 #include "main.h"
+#ifdef TELEMETRY_ENABLED
 #include "sedsnet_config.h"
 #include "telemetry.h"
+#endif
 
 #include <math.h>
 #include <stdint.h>
@@ -244,10 +246,12 @@ void telemetry_ltc2990_update_voltage(LTC2990_Handle_t *ltc2990_handle) {
     if (!isfinite(voltage)) return;
 
 
+#ifdef TELEMETRY_ENABLED
     SedsResult res = log_telemetry_asynchronous(SEDS_DT_BATTERY_VOLTAGE, &voltage, 1, sizeof(float));
     if (res != SEDS_OK) {
         g_power_telemetry_drops++;
     }
+#endif
 }
 
 
@@ -262,8 +266,10 @@ void telemetry_ltc2990_update_current(LTC2990_Handle_t *ltc2990_handle) {
     }
 
 
+#ifdef TELEMETRY_ENABLED
     SedsResult res = log_telemetry_asynchronous(SEDS_DT_BATTERY_CURRENT, &current_value, 1, sizeof(float));
     if (res != SEDS_OK) {
         g_power_telemetry_drops++;
     }
+#endif
 }

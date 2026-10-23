@@ -43,8 +43,10 @@ math(EXPR _launchcore_firmware_capacity
     "${_launchcore_slot_size} - (${_launchcore_vector_table} - ${_launchcore_slot_base})")
 
 if(DEFINED LAUNCHCORE_DELTA_SIZE)
+    if(ENABLE_TELEMETRY)
+        target_sources(${CMAKE_PROJECT_NAME} PRIVATE "${CMAKE_SOURCE_DIR}/Core/Src/ota_stream.c")
+    endif()
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE
-        "${CMAKE_SOURCE_DIR}/Core/Src/ota_stream.c"
         "${CMAKE_SOURCE_DIR}/Core/Src/launchcore_delta_format.c"
         "${sedslaunchcore_SOURCE_DIR}/bootloader/src/crc32.c"
         "${sedslaunchcore_SOURCE_DIR}/bootloader/src/metadata.c"

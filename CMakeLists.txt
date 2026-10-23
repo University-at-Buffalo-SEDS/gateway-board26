@@ -26,6 +26,8 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS TRUE)
 
 # Core project settings
 project(${CMAKE_PROJECT_NAME})
+option(ENABLE_TELEMETRY "Enable the telemetry subsystem" ON)
+
 message("Build type: " ${CMAKE_BUILD_TYPE})
 
 # Keep the complete network feature set in the 512 KiB part. Apply the
@@ -52,7 +54,7 @@ endif()
 
 # Create an executable object type
 add_executable(${CMAKE_PROJECT_NAME})
-if(SEDS_FIRMWARE_SIM_TEST)
+if(SEDS_FIRMWARE_SIM_TEST AND ENABLE_TELEMETRY)
     # Inactive allocator probes are read-only zeroes in TLSF builds; LTO
     # still needs explicit roots so the debugger can resolve their symbols.
     target_link_options(gateway_board PRIVATE
@@ -96,19 +98,24 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 # Add sources to executable
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user sources here
-    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/can_bus.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/can_tx_queue.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/telemetry_thread.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/telemetry.c
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/flight_state_cache.c
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/persistent_store.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/telemetry_hooks.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/telemetry_uart.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/board_link_uart.c
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/ltc2990.c
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/gateway_crc32.c
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/data_acq.c
 )
+
+if(ENABLE_TELEMETRY)
+    target_sources(${CMAKE_PROJECT_NAME} PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/can_bus.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/can_tx_queue.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/telemetry_thread.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/telemetry.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/telemetry_hooks.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/telemetry_uart.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/board_link_uart.c
+    )
+endif()
 
 # Add include paths
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
@@ -162,13 +169,14 @@ set(SEDSNET_ENV_PAYLOAD_COMPRESS_THRESHOLD "30" CACHE STRING "" FORCE)
 set(SEDSNET_TARGET "thumbv7em-none-eabihf" CACHE STRING "" FORCE)
 set(SEDSNET_ENV_RUSTFLAGS "-Ctarget-cpu=cortex-m4" CACHE STRING
     "Rust code generation flags for the Gateway Cortex-M4")
-include(cmake/sedsnet_fetch.cmake)
+if(ENABLE_TELEMETRY)
+    include(cmake/sedsnet_fetch.cmake)
+endif()
 
 
 
 # Option defaults to ON
-option(ENABLE_TELEMETRY "Enable the telemetry subsystem" ON)
-set(ENABLE_TELEMETRY ON CACHE BOOL "Enable the telemetry subsystem" FORCE)
+
 option(ENABLE_TELEMETRY_BOARD_LINK_UART "Enable board-to-board telemetry side on LPUART1" OFF)
 set(ENABLE_TELEMETRY_BOARD_LINK_UART OFF CACHE BOOL
     "Enable board-to-board telemetry side on LPUART1" FORCE)
@@ -207,5 +215,7 @@ include(cmake/launchcore_stm32.cmake)
 # Board-owned progress watchdog; deliberately independent of SEDSnet.
 option(ENABLE_BOARD_WATCHDOG "Enable independent hardware watchdog with task progress gating" ON)
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/Core/Src/board_watchdog.c)
-target_sources(${CMAKE_PROJECT_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/Core/Src/board_health.c)
+if(ENABLE_TELEMETRY)
+    target_sources(${CMAKE_PROJECT_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/Core/Src/board_health.c)
+endif()
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE BOARD_WATCHDOG_ENABLE=$<BOOL:${ENABLE_BOARD_WATCHDOG}>)

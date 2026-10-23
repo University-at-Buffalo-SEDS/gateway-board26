@@ -1,5 +1,5 @@
 option(TELEMETRY_USE_TLSF "Experiment: use TLSF for board-owned SEDSNet allocation hooks" OFF)
-if(TELEMETRY_USE_TLSF)
+if(ENABLE_TELEMETRY AND TELEMETRY_USE_TLSF)
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE
         ${CMAKE_CURRENT_LIST_DIR}/../Core/Src/telemetry_tlsf.c
         ${CMAKE_CURRENT_LIST_DIR}/../third_party/tlsf/tlsf.c)

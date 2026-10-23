@@ -33,7 +33,7 @@ void board_watchdog_start(void)
     g_watchdog_reset_flags = RCC->CSR;
 #endif
     __HAL_RCC_CLEAR_RESET_FLAGS();
-#if BOARD_WATCHDOG_ENABLE && defined(TELEMETRY_ENABLED)
+#if BOARD_WATCHDOG_ENABLE
     /* Independent LSI oscillator: nominal 16.384 s at 32 kHz. This is a
      * last-resort reset deadline, not an actuator pulse timeout. */
     IWDG->KR = 0xCCCCU;
