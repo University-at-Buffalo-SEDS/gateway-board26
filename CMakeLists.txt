@@ -65,7 +65,8 @@ endif()
 include(cmake/tlsf_allocator.cmake)
 
 # Optional SEDSnet arena is enabled with SEDSNET_COMPACT_PACKET_STORE=ON.
-set(GATEWAY_PACKET_ARENA_BYTES "8192" CACHE STRING "Compact packet arena byte capacity")
+# Leave TLSF scratch headroom for discovery and fragmented ingress.
+set(GATEWAY_PACKET_ARENA_BYTES "2048" CACHE STRING "Compact packet arena byte capacity")
 set(GATEWAY_PACKET_ARENA_HANDLES "64" CACHE STRING "Compact packet arena handle capacity")
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
     GATEWAY_PACKET_ARENA_BYTES=${GATEWAY_PACKET_ARENA_BYTES}U

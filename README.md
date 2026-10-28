@@ -108,13 +108,19 @@ when the network is unavailable the last usable on-disk source is retained.
 The selected revision is printed during configure. An explicit CMake source
 override remains local and is never fetched or reset.
 
-The compact packet arena is initialized before router startup with a 2 KiB
-payload budget and 16 handles, plus fixed startup metadata.
-The previous 8 KiB/64-handle arena reserved 10 KiB while empty and could
-starve discovery on real hardware. SEDSnet 4.1.3 retains existing heap
-payloads when optional arena parking cannot fit them; queue and allocator
-admission bounds still apply. Use `--packet-store heap` with TLSF for the
-current recovery configuration; the smaller arena remains experimental.
+Compact CMake builds initialize the packet store before router startup with a
+2 KiB payload arena and 64 handles. Including the handle table, the store reserves
+4 KiB from the existing allocator pool. An 8 KiB payload arena with the same handle
+count reserves 10 KiB before carrying any payload, leaving less scratch space for
+discovery and fragmented ingress. `GATEWAY_PACKET_ARENA_BYTES` and
+`GATEWAY_PACKET_ARENA_HANDLES` remain configurable CMake cache options.
+
+Use `--allocator tlsf --packet-store compact` to exercise this configuration.
+SEDSnet 4.3.1 retains existing heap payloads when optional arena parking cannot fit
+them; an arena fallback does not mean that a network frame was dropped. Total
+allocator pools, queue limits, and admission reserves still apply. A larger arena
+should be selected only after measuring its effect on scratch headroom and
+sustained forwarding. `--packet-store heap` disables optional arena parking.
 It is separate from TLSF, which replaces only board-owned telemetry allocation
 hooks; ThreadX scheduling continues unchanged. The gateway carves an 8 KiB fallback pool from the existing TLSF region,
 using 32 blocks of 256 bytes. Ordinary allocation is attempted first; failed
