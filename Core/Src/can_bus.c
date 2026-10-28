@@ -269,9 +269,9 @@ static inline void record_first_rx_drop(void) {
      * allocation-failure buffer. A later OOM may replace this diagnostic. */
     extern volatile uint32_t g_telemetry_alloc_failure_stack[128];
     const uintptr_t psp = __get_PSP();
-    if (psp >= 0x20000000U && psp <= 0x2001c000U - 128U) {
+    if (psp >= 0x20000000U && psp <= 0x2001c000U - 256U) {
       const volatile uint32_t *frame = (const volatile uint32_t *)psp;
-      for (unsigned i = 0; i < 32U; ++i)
+      for (unsigned i = 0; i < 64U; ++i)
         g_telemetry_alloc_failure_stack[64U+i] = frame[i];
       g_telemetry_alloc_failure_stack[62] = (uint32_t)psp;
       g_telemetry_alloc_failure_stack[63] = 0x43414e44U;
