@@ -24,7 +24,8 @@ class OtaBuildScriptTests(unittest.TestCase):
                      "-DGATEWAY_PICO_UART_BAUD_RATE=1000000"):
             self.assertIn(flag, configure)
         normal = build.build_cfg_from_args(mock.Mock(), build.make_parser().parse_args(["build", "--release"]))
-        self.assertEqual(normal.packet_store, "heap")
+        self.assertEqual(normal.packet_store, "compact")
+        self.assertEqual(normal.allocator, "tlsf")
         self.assertEqual(normal.sedsnet_ref, "main")
         args.pico_baud = 0
         with self.assertRaisesRegex(build.FriendlyError, "positive"):

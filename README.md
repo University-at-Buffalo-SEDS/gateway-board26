@@ -99,7 +99,7 @@ show reduced CAN loss, not lossless service or indefinite OOM immunity. Soak tes
 must monitor forwarding, all board liveness, pressure refusals, allocator failures,
 and ring overruns together.
 
-## Experimental SEDSnet development builds
+## SEDSnet build configuration
 
 Use `python3 build.py build --release --sedsnet-ref dev` to build the current
 SEDSnet `dev` commit. The same option is accepted by `test` and `flash`.
@@ -179,3 +179,8 @@ are unsuitable for this board's live memory budget.
 ## Return-route liveness under memory pressure
 
 Use SEDSnet main/dev commit `6568de6` (4.1.4) or newer. Earlier versions can expire a live GroundStation return route when allocator admission refuses its discovery updates, while commands still reach CAN boards. Router and Relay now refresh a known ingress peer from CRC-valid self-describing frames before payload admission, without allocating or modifying schema/reachability. Small pressure keepalives use bounded control headroom. Rebuilding this board fetches the latest selected main/dev source.
+
+TLSF allocation and compact packet stores are enabled by default in both `build.py`
+and direct CMake builds. Use `--allocator threadx --packet-store heap` for an
+explicit fallback; direct CMake accepts
+`-DTELEMETRY_USE_TLSF=OFF` and `-DSEDSNET_COMPACT_PACKET_STORE=OFF`. ThreadX still schedules all firmware tasks.

@@ -62,9 +62,10 @@ if(SEDS_FIRMWARE_SIM_TEST AND ENABLE_TELEMETRY)
         -Wl,--undefined=g_telemetry_alloc_emergency_recoveries
     )
 endif()
+option(SEDSNET_COMPACT_PACKET_STORE "Use bounded SEDSnet packet stores" ON)
 include(cmake/tlsf_allocator.cmake)
 
-# Optional SEDSnet arena is enabled with SEDSNET_COMPACT_PACKET_STORE=ON.
+# Compact SEDSnet storage is enabled by default within the existing pool.
 # Leave TLSF scratch headroom for discovery and fragmented ingress.
 set(GATEWAY_PACKET_ARENA_BYTES "2048" CACHE STRING "Compact packet arena byte capacity")
 set(GATEWAY_PACKET_ARENA_HANDLES "64" CACHE STRING "Compact packet arena handle capacity")

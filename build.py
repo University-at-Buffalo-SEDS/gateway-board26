@@ -421,11 +421,11 @@ class BuildConfig:
     project_name: str
     artifact: Optional[str]  # base name without extension (if known/forced)
 
-    packet_store: str = "heap"
+    packet_store: str = "compact"
     pico_baud: int | None = None
     sedsnet_ref: str = "main"
     watchdog: bool = True
-    allocator: str = "threadx"
+    allocator: str = "tlsf"
 
     @property
     def build_dir(self) -> Path:
@@ -859,9 +859,9 @@ def make_parser() -> argparse.ArgumentParser:
         mode = sp.add_mutually_exclusive_group()
         mode.add_argument("--debug", action="store_true", help="Debug build (default).")
         mode.add_argument("--release", action="store_true", help="Release build.")
-        sp.add_argument("--allocator", choices=["threadx", "tlsf"], default="threadx",
-                        help="Telemetry allocator (default: threadx); scheduling always uses ThreadX.")
-        sp.add_argument("--packet-store", choices=["heap", "compact"], default="heap",
+        sp.add_argument("--allocator", choices=["threadx", "tlsf"], default="tlsf",
+                        help="Telemetry allocator (default: tlsf); scheduling always uses ThreadX.")
+        sp.add_argument("--packet-store", choices=["heap", "compact"], default="compact",
                         help="Experimental compact arena selects SEDSnet dev unless --sedsnet-ref is supplied.")
         sp.add_argument("--pico-baud", type=int, default=None,
                         help="Gateway/Pico UART baud; must match the Pico firmware (paired build: 1000000).")
