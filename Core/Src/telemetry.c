@@ -701,14 +701,16 @@ void rx_asynchronous(const uint8_t *bytes, size_t len) {
   }
 
 #ifdef TELEMETRY_USE_TLSF
-  /* Drain already-owned work before copying another completed CAN packet.
-   * A captured startup refusal had5572 bytes free for1526 bytes of work plus
-   * the unchanged4096-byte reserve. Prefer releasing completed UART DMA first;
-   * if needed, one bounded queue pass frees old payloads. The incoming frame
-   * is handed off once below, never retried after partial side decoding. */
-  if (telemetry_tlsf_available_bytes() < 6144U) {
+  /* The SDK's ordinary frame estimate is2048+3*len, plus the unchanged
+   *4096-byte reserve. A fixed6144-byte threshold missed49-byte frames with
+   *6164 bytes free: they need6291. Release retired DMA, then at most one
+   * bounded old-queue pass before the single side-aware decode below. The
+   * SDK still makes the final admission decision; no decoded frame is replayed. */
+  const size_t required_headroom = len > (SIZE_MAX - 6144U) / 3U ?
+      SIZE_MAX : 6144U + 3U * len;
+  if (telemetry_tlsf_available_bytes() < required_headroom) {
     telemetry_uart_process();
-    if (telemetry_tlsf_available_bytes() < 6144U)
+    if (telemetry_tlsf_available_bytes() < required_headroom)
       (void)process_all_queues_timeout(1U);
   }
 #endif

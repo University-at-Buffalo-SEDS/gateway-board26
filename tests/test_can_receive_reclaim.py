@@ -19,7 +19,7 @@ static unsigned errors,admission_rejected,g_telemetry_discovery_seen;
 static unsigned handoffs,queued,old_delivered,uart_runs,uart_frees,locked;
 static size_t available=5572;
 static uint32_t g_gateway_admission_last_free,g_gateway_admission_last_additional,g_gateway_admission_last_largest;
-static uint8_t saved[4];
+static uint8_t saved[49];
 static size_t telemetry_tlsf_available_bytes(void){return available;}
 static void telemetry_uart_process(void){assert(!locked);uart_runs++;if(uart_frees)available+=1024;}
 static SedsResult process_all_queues_timeout(uint32_t ms){assert(!locked&&ms==1);old_delivered++;available+=4096;return SEDS_OK;}
@@ -29,8 +29,8 @@ static void telemetry_lock(void){assert(!locked);locked=1;}
 static void telemetry_unlock(void){assert(locked);locked=0;}
 static void telemetry_signal_deserialize_failure(void){errors++;}
 static int seds_router_rx_packed_packet_to_queue_from_side(void*r,unsigned side,const uint8_t*p,size_t n){
- assert(locked&&r&&side==2&&n==4);handoffs++;
- if(available<5622){admission_rejected++;return SEDS_ERR;}
+ assert(locked&&r&&side==2&&(n==4||n==49));handoffs++;
+ if(available<(n==49?6291:5622)){admission_rejected++;return SEDS_ERR;}
  memcpy(saved,p,n);queued++;return SEDS_OK;
 }
 static int seds_router_rx_packed_packet_to_queue(void*r,const uint8_t*p,size_t n){return seds_router_rx_packed_packet_to_queue_from_side(r,2,p,n);}
@@ -44,6 +44,14 @@ int main(void){
  available=5572;uart_frees=1;rx_asynchronous(wire,4);
  assert(handoffs==3&&queued==3&&old_delivered==1&&!errors); /* Retired DMA alone suffices. */
  rx_asynchronous(NULL,4);rx_asynchronous(wire,0);assert(handoffs==3);
+ // Captured later health report:49 wire bytes,2195 bytes of SDK work,
+ //4096-byte reserve,6164 bytes free. Retiring DMA releases enough memory.
+ uint8_t health[49]={0};available=6164;uart_frees=1;before_uart=uart_runs;
+ rx_asynchronous(health,sizeof(health));
+ assert(handoffs==4&&queued==4&&old_delivered==1&&!errors&&uart_runs==before_uart+1);
+ // If DMA cannot release memory, dispatch old owned work before this frame.
+ available=6164;uart_frees=0;rx_asynchronous(health,sizeof(health));
+ assert(handoffs==5&&queued==5&&old_delivered==2&&!errors&&!locked);
  return 0;}
 '''
         with tempfile.TemporaryDirectory() as tmp:
