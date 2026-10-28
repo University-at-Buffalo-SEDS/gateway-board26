@@ -40,6 +40,9 @@ class NetworkRestartScenarioTests(unittest.TestCase):
         topologies = self.capture(False)
         self.assertTrue(topologies)
         self.assertTrue(all(not t.get("reboots") for t in topologies))
+        for topology in topologies:
+            primary = next(node for node in topology["host_nodes"] if node["name"] == "groundstation")
+            self.assertEqual(primary["env"].get("GS_SIM_NETWORK_EPOCH_MS"), "1767225600000")
 
     def test_long_gate_restarts_service_without_power_cycling_boards_first(self):
         topology = self.capture(True)[-1]

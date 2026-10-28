@@ -37,8 +37,6 @@
     "sample_count": 1,
     "memory_probe_warmup_samples": 0,
     "require_stack_probe": true,
-    "hal_tick_address": 536889012,
-    "hal_tick_step": 100,
     "memory_probes": [
       {"name": "telemetry_loop_completions", "symbol": "g_gateway_telemetry_loop_count"},
       {"name": "network_ready", "symbol": "g_telemetry_network_ready"},
