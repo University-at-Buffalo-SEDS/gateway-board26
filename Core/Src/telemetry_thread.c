@@ -146,14 +146,17 @@ void telemetry_thread_entry(ULONG initial_input)
         const uint32_t now = HAL_GetTick();
         if ((int32_t)(now - maintenance_due) >= 0) {
             maintenance_due = now + TELEMETRY_MAINTENANCE_PERIOD_MS;
-            const uint8_t can_was_drained = can_bus_rx_pending() < 16U;
+            const uint32_t can_before_maintenance = can_bus_rx_pending();
             SERVICE(3, (void)telemetry_poll_discovery());
             SERVICE(4, (void)telemetry_poll_timesync());
             /* Building a startup schema can exceed the maintenance budget.
              * IRQs continue filling CAN during that call. Catch a new burst
              * before stacking another expensive network operation on it.
              * A permanently busy ring keeps the original per-cycle bound. */
-            if (can_was_drained && can_bus_rx_pending() >= 16U) {
+            const uint32_t can_after_maintenance = can_bus_rx_pending();
+            if (can_after_maintenance >= 16U &&
+                (can_before_maintenance < 16U ||
+                 can_after_maintenance > can_before_maintenance)) {
                 const uint32_t catchup_started = HAL_GetTick();
                 do {
                     uint32_t received;

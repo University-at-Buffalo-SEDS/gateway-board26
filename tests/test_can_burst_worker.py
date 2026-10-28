@@ -74,7 +74,11 @@ static int telemetry_poll_discovery(void) {
     return 0;
 }
 static int telemetry_poll_timesync(void) { return 0; }
-static void ota_stream_poll(void) {}
+static void ota_stream_poll(void) {
+    // Maintenance may grow a ring that was already busy. Service the new
+    // burst before stacking OTA/sleep and the next worker cycle on it.
+    assert(!needs_maintenance_drain);
+}
 static void telemetry_hil_capture_requested_snapshot(void) {}
 static void sample_telemetry_stack(void) {}
 static void tx_thread_sleep(unsigned n) {
@@ -105,6 +109,9 @@ int main(void) {
     reset(0); pending=0; inject_maintenance_burst=1;
     if (!setjmp(completed)) telemetry_thread_entry(0);
     assert(frames == 32 && pending == 0 && network_pending == 0 && handoff_drops == 0);
+    reset(1); inject_maintenance_burst=1;
+    if (!setjmp(completed)) telemetry_thread_entry(0);
+    assert(network_calls == 6 && frames == 96 && handoff_drops == 0 && network_pending == 0);
     reset(1);
     if (!setjmp(completed)) telemetry_thread_entry(0);
     // A continuously replenished ring services each handoff once and yields;
