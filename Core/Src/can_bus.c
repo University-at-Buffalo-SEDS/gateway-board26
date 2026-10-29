@@ -318,13 +318,17 @@ static inline int rb_replace_dominant(uint32_t std_id, const uint8_t *data,
     const unsigned peer = can_rx_sender_index(g_rx_ring[i].std_id);
     /* Low arbitration IDs are reserved for priority/liveness traffic. */
     if (g_rx_ring[i].std_id >= 0x100U && peer > 0U && peer < 8U &&
-        (priority || peer != incoming) && counts[peer] > largest) {
+        (priority || (peer != incoming && counts[peer] > counts[incoming])) &&
+        counts[peer] >= largest) {
       largest = counts[peer];
       victim = i;
     }
   }
   if (victim == CAN_BUS_RX_RING_DEPTH) return 0;
   const unsigned evicted_peer = can_rx_sender_index(g_rx_ring[victim].std_id);
+  /* On equal dominance choose the latest eligible frame. Every retained
+   * frame still stays in FIFO order, but the IRQ copies only the suffix
+   * after that victim rather than nearly the complete saturated ring. */
   uint16_t last = victim;
   while (rb_next(last) != head) {
     const uint16_t next = rb_next(last);
