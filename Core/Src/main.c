@@ -108,7 +108,14 @@ int main(void)
   HAL_Init();
 
   /* USER CODE BEGIN Init */
-
+  /* HAL_Init relies on reset defaults when caches are enabled in the config.
+   * Explicitly enable them when the application is entered by the bootloader. */
+#if (INSTRUCTION_CACHE_ENABLE != 0U)
+  __HAL_FLASH_INSTRUCTION_CACHE_ENABLE();
+#endif
+#if (DATA_CACHE_ENABLE != 0U)
+  __HAL_FLASH_DATA_CACHE_ENABLE();
+#endif
   /* USER CODE END Init */
 
   /* Configure the system clock */
@@ -401,7 +408,7 @@ static void MX_USART2_UART_Init(void)
   /* USER CODE END USART2_Init 1 */
   huart2.Instance = USART2;
 #ifndef GATEWAY_PICO_UART_BAUD_RATE
-#define GATEWAY_PICO_UART_BAUD_RATE 115200U
+#define GATEWAY_PICO_UART_BAUD_RATE 1000000U
 #endif
   huart2.Init.BaudRate = GATEWAY_PICO_UART_BAUD_RATE;
   huart2.Init.WordLength = UART_WORDLENGTH_8B;

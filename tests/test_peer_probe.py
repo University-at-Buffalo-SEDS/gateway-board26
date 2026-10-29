@@ -17,20 +17,26 @@ class PeerProbeTests(unittest.TestCase):
         static int32_t g_gateway_peer_probe_result;
         static char *g_gateway_peer_probe_json;
         static char memory[2048];
-        static int refuse, guard=1;
+        static int refuse, guard=1, locked;
+        static uint32_t g_gateway_memory_counters[16], g_gateway_queue_counters[16];
         static struct {void *r;} g_router={memory};
         static uint32_t HAL_GetTick(void){return tick;}
         static int telemetry_tlsf_admit(size_t n,size_t b){assert(n==10240&&b==2048);return guard;}
         static void *telemetry_can_tx_allocate(size_t n){assert(n==2048);allocations++;return refuse?NULL:memory;}
         static void telemetryFree(void *p){assert(p==NULL||p==memory);if(p)frees++;}
-        static void telemetry_lock(void){}
-        static void telemetry_unlock(void){}
+        static void telemetry_lock(void){assert(!locked);locked=1;}
+        static void telemetry_unlock(void){assert(locked);locked=0;}
+        static int32_t seds_router_copy_memory_counters(void *r,uint32_t *out,size_t n){assert(locked&&r&&n==16);for(unsigned i=0;i<16;i++)out[i]=i+100;return 16;}
+        static int32_t seds_router_copy_queue_counters(void *r,uint32_t *out,size_t n){assert(locked&&r&&n==16);for(unsigned i=0;i<16;i++)out[i]=i+200;return 16;}
         static int seds_router_export_client_stats(void *r,const char *peer,size_t len,char *p,size_t n){assert(r&&p==memory&&n==2048&&len==strlen(peer));exports++;strcpy(p,peer);return 0;}
         static int seds_router_export_memory_layout(void *r,char *p,size_t n){assert(r&&p==memory&&n==2048);exports++;strcpy(p,"layout");return 0;}
         static int seds_router_export_topology(void *r,char *p,size_t n){assert(r&&p==memory&&n==2048);exports++;strcpy(p,"topology");return 0;}
         ''' +func+r'''
         int main(void){
          telemetry_hil_capture_requested_snapshot();assert(allocations==0);
+         tick=1000;telemetry_hil_capture_requested_snapshot();assert(allocations==0&&exports==0&&!locked);
+         assert(g_gateway_memory_counters[15]==115&&g_gateway_queue_counters[15]==215);
+         tick=0;
          guard=0;g_gateway_peer_probe_request=1;telemetry_hil_capture_requested_snapshot();assert(allocations==0&&exports==0&&g_gateway_peer_probe_result==-14);
          guard=1;refuse=1;g_gateway_peer_probe_request=1;telemetry_hil_capture_requested_snapshot();assert(g_gateway_peer_probe_result==-14 && exports==0);
          refuse=0;g_gateway_peer_probe_request=1;telemetry_hil_capture_requested_snapshot();assert(!strcmp(memory,"GS") && g_gateway_peer_probe_result==0);

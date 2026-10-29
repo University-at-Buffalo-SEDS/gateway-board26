@@ -74,7 +74,7 @@ target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
     GATEWAY_PACKET_ARENA_HANDLES=${GATEWAY_PACKET_ARENA_HANDLES}U)
 
 # Both the gateway and its Pico-Fi peer must use the same UART baud rate.
-set(GATEWAY_PICO_UART_BAUD_RATE 115200 CACHE STRING "Gateway-to-Pico-Fi UART baud rate")
+set(GATEWAY_PICO_UART_BAUD_RATE 1000000 CACHE STRING "Gateway-to-Pico-Fi UART baud rate")
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
     GATEWAY_PICO_UART_BAUD_RATE=${GATEWAY_PICO_UART_BAUD_RATE}U)
 
