@@ -422,7 +422,8 @@ class BuildConfig:
     artifact: Optional[str]  # base name without extension (if known/forced)
 
     packet_store: str = "compact"
-    pico_baud: int | None = None
+    pico_baud: int | None = 1000000
+    sedsnet_offline: bool = False
     sedsnet_ref: str = "main"
     watchdog: bool = True
     allocator: str = "tlsf"
@@ -467,6 +468,7 @@ def configure_and_build(ui: UI, cfg: BuildConfig, target: str | None = None) -> 
         "-DCMAKE_COMMAND=cmake",
         watchdog_flag,
         f"-DSEDSNET_GIT_REF={cfg.sedsnet_ref}",
+        f"-DSEDSNET_OFFLINE={'ON' if cfg.sedsnet_offline else 'OFF'}",
         f"-DSEDSNET_COMPACT_PACKET_STORE={'ON' if cfg.packet_store == 'compact' else 'OFF'}",
         "-DSEDSNET_COMPACT_PACKET_COMPRESSION=OFF",
         *([f"-DGATEWAY_PICO_UART_BAUD_RATE={cfg.pico_baud}"] if cfg.pico_baud else []),
@@ -863,8 +865,10 @@ def make_parser() -> argparse.ArgumentParser:
                         help="Telemetry allocator (default: tlsf); scheduling always uses ThreadX.")
         sp.add_argument("--packet-store", choices=["heap", "compact"], default="compact",
                         help="Experimental compact arena selects SEDSnet dev unless --sedsnet-ref is supplied.")
-        sp.add_argument("--pico-baud", type=int, default=None,
-                        help="Gateway/Pico UART baud; must match the Pico firmware (paired build: 1000000).")
+        sp.add_argument("--pico-baud", type=int, default=1000000,
+                        help="Gateway/Pico UART baud (default: 1000000); must match the Pico firmware.")
+        sp.add_argument("--sedsnet-offline", action="store_true",
+                        help="Use cached SEDSnet without checking the selected branch online.")
         sp.add_argument("--sedsnet-ref", choices=["main", "dev"], default=None,
                         help="SEDSnet branch; current remote commit is fetched, with offline fallback.")
         sp.add_argument("--no-telemetry", action="store_true", help="Configure with -DENABLE_TELEMETRY=OFF")
@@ -950,6 +954,7 @@ def build_cfg_from_args(ui: UI, args: argparse.Namespace) -> BuildConfig:
         watchdog=args.watchdog,
         packet_store=args.packet_store,
         pico_baud=args.pico_baud,
+        sedsnet_offline=args.sedsnet_offline,
         sedsnet_ref=args.sedsnet_ref or "main",
         allocator=args.allocator,
         generator=args.generator,

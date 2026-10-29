@@ -21,12 +21,19 @@ class OtaBuildScriptTests(unittest.TestCase):
         configure = execute.call_args_list[0].args[1]
         for flag in ("-DSEDSNET_GIT_REF=main", "-DSEDSNET_COMPACT_PACKET_STORE=ON",
                      "-DTELEMETRY_USE_TLSF=ON", "-DGATEWAY_CACHED_TRANSIT_ADMISSION=ON",
+                     "-DSEDSNET_OFFLINE=OFF",
                      "-DGATEWAY_PICO_UART_BAUD_RATE=1000000"):
             self.assertIn(flag, configure)
         normal = build.build_cfg_from_args(mock.Mock(), build.make_parser().parse_args(["build", "--release"]))
         self.assertEqual(normal.packet_store, "compact")
         self.assertEqual(normal.allocator, "tlsf")
         self.assertEqual(normal.sedsnet_ref, "main")
+        self.assertEqual(normal.pico_baud, 1000000)
+        offline_args = build.make_parser().parse_args(["build", "--sedsnet-offline"])
+        offline = build.build_cfg_from_args(mock.Mock(), offline_args)
+        with mock.patch.object(build, "run") as execute, mock.patch.object(build, "pick_elf", return_value=Path("/tmp/test.elf")):
+            build.configure_and_build(mock.Mock(), offline)
+        self.assertIn("-DSEDSNET_OFFLINE=ON", execute.call_args_list[0].args[1])
         args.pico_baud = 0
         with self.assertRaisesRegex(build.FriendlyError, "positive"):
             build.build_cfg_from_args(mock.Mock(), args)

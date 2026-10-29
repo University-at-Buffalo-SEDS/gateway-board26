@@ -452,17 +452,26 @@ void telemetry_set_unix_time_ms(uint64_t unix_ms) {
  * Keep the instrumented image within the physical SRAM budget. */
 extern volatile uint32_t g_telemetry_alloc_failure_stack[128];
 #define g_gateway_memory_counters g_telemetry_alloc_failure_stack
+#define g_gateway_queue_counters (g_telemetry_alloc_failure_stack + 20U)
+#else
+/* Borrow-only snapshots for a live ST-Link capture. No JSON buffer, network
+ * traffic or heap allocation is needed to distinguish queue/budget pressure. */
+volatile uint32_t g_gateway_memory_counters[16];
+volatile uint32_t g_gateway_queue_counters[16];
 #endif
 void telemetry_hil_capture_requested_snapshot(void) {
-#ifdef SEDS_FIRMWARE_SIM_TEST
   static uint32_t last_memory_snapshot;
   const uint32_t snapshot_tick = HAL_GetTick();
   if (g_router.r && (uint32_t)(snapshot_tick - last_memory_snapshot) >= 1000U) {
     uint32_t counters[16];
+    uint32_t queues[16];
     telemetry_lock();
     const int32_t count = seds_router_copy_memory_counters(g_router.r, counters, 16U);
+    const int32_t queue_count = seds_router_copy_queue_counters(g_router.r, queues, 16U);
     telemetry_unlock();
     if (count == 16) for (unsigned i = 0; i < 16U; ++i) g_gateway_memory_counters[i] = counters[i];
+    if (queue_count == 16) for (unsigned i = 0; i < 16U; ++i) g_gateway_queue_counters[i] = queues[i];
+#ifdef SEDS_FIRMWARE_SIM_TEST
     /* Borrow-only metadata query: distinguish a refused remote priority merge
      * from a tight queue/fragment budget without another diagnostic buffer. */
     SedsDataTypeInfo gps_info = {0};
@@ -470,9 +479,9 @@ void telemetry_hil_capture_requested_snapshot(void) {
         (uint32_t)SEDS_DT_GPS_DATA, NULL, 0U, &gps_info);
     g_gateway_memory_counters[16] = gps_info.priority;
     g_gateway_memory_counters[17] = gps_result == SEDS_OK && gps_info.exists;
+#endif
     last_memory_snapshot = snapshot_tick;
   }
-#endif
   const uint32_t request = g_gateway_peer_probe_request;
   const uint32_t now = HAL_GetTick();
 #if defined(SEDS_FIRMWARE_SIM_TEST) || defined(GATEWAY_HIL_DIAGNOSTICS)
