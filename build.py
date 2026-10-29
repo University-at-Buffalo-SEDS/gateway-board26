@@ -1032,7 +1032,8 @@ def main() -> None:
             _run_test_stage(
                 ui, results, "Network discovery and time sync",
                 lambda: run_network_simulation(
-                    ui, cfg.repo_root, "stm32g4", cfg.build_subdir
+                    ui, cfg.repo_root, "stm32g4", cfg.build_subdir,
+                    sedsnet_ref=cfg.sedsnet_ref,
                 ),
             )
             if args.ultra_soak:
@@ -1041,6 +1042,7 @@ def main() -> None:
                     lambda: run_network_simulation(
                         ui, cfg.repo_root, "stm32g4", cfg.build_subdir,
                         ultra_soak=True,
+                        sedsnet_ref=cfg.sedsnet_ref,
                     ),
                 )
         _print_test_summary(ui, results)
