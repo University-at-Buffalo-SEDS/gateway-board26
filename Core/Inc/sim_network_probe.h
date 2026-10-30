@@ -168,8 +168,18 @@ static inline void sim_probe_emit_heartbeat(SedsRouter *router,
       (now_ms >= next_emit_ms ||
        (emit_count < 4U && service_cycles >= (30U + ((uint32_t)emit_count * 75U))))) {
     g_sim_heartbeat_attempts++;
-    if (seds_router_log_bytes_ex(router, SEDS_DT_HEARTBEAT, &empty_payload,
-                                 0U, NULL, 1) == SEDS_OK) {
+    /* Probe provenance is for the GS observer, not an avionics watchdog.
+     * Explicit endpoints survive merged catalogs that union default routes. */
+    const uint32_t endpoint = SEDS_EP_GROUND_STATION;
+    uint64_t timestamp_ms = now_ms;
+    (void)seds_router_get_network_time_ms(router, &timestamp_ms);
+    const SedsPacketView heartbeat = {
+        .ty = SEDS_DT_HEARTBEAT, .data_size = 0U,
+        .sender = "GB", .sender_len = 2U,
+        .endpoints = &endpoint, .num_endpoints = 1U,
+        .timestamp = timestamp_ms,
+        .payload = &empty_payload, .payload_len = 0U};
+    if (seds_router_transmit_message_queue(router, &heartbeat) == SEDS_OK) {
       if (emit_count < 4U) emit_count++;
       next_emit_ms = now_ms + (emit_count < 4U ? 100U : 1000U);
       g_sim_heartbeat_ok++;

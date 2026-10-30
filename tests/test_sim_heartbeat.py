@@ -21,17 +21,25 @@ class SimulationHeartbeat(unittest.TestCase):
 #include <assert.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 typedef struct { int value; } SedsRouter;
-enum { SEDS_OK = 0, SEDS_ERR = 1, SEDS_DT_HEARTBEAT = 3 };
+typedef struct { unsigned ty, data_size; const char *sender; size_t sender_len;
+ const uint32_t *endpoints; size_t num_endpoints; uint64_t timestamp;
+ const uint8_t *payload; size_t payload_len; } SedsPacketView;
+enum { SEDS_OK = 0, SEDS_ERR = 1, SEDS_DT_HEARTBEAT = 3,
+       SEDS_EP_GROUND_STATION = 17 };
 volatile uint32_t g_sim_heartbeat_attempts, g_sim_heartbeat_ok, g_sim_heartbeat_fail;
 static unsigned calls;
 static int mock_status;
-int seds_router_log_bytes_ex(SedsRouter *r, int type, const uint8_t *p,
-                            size_t n, void *dest, int priority) {
-    assert(r && type == SEDS_DT_HEARTBEAT && p && n == 0 && dest == NULL);
-    assert(priority == 1);
-    ++calls;
-    return mock_status;
+int seds_router_get_network_time_ms(SedsRouter *r, uint64_t *out) {
+ assert(r); *out=1234567; return SEDS_OK;
+}
+int seds_router_transmit_message_queue(SedsRouter *r, const SedsPacketView *p) {
+ assert(r && p && p->ty==SEDS_DT_HEARTBEAT && p->data_size==0);
+ assert(p->payload && p->payload_len==0 && p->timestamp==1234567);
+ assert(p->num_endpoints==1 && p->endpoints[0]==SEDS_EP_GROUND_STATION);
+ assert(p->sender_len==sizeof("GB")-1 && memcmp(p->sender,"GB",p->sender_len)==0);
+ ++calls; return mock_status;
 }
 """
         main = """
