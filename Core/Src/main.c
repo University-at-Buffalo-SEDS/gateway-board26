@@ -29,6 +29,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "flight_state_cache.h"
+#include "board_recovery_boot.h"
 extern UX_SLAVE_CLASS_CDC_ACM *cdc_acm;
 /* USER CODE END Includes */
 
@@ -144,6 +145,8 @@ int main(void)
 
   /* USER CODE END 2 */
 
+  /* Establish recovery identity before cached state restore and control tasks. */
+  (void)board_recovery_boot_generation();
   flight_state_cache_restore();
   board_watchdog_start();
   MX_ThreadX_Init();
