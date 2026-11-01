@@ -50,6 +50,8 @@ UINT tx_mutex_put(TX_MUTEX *mutex) {
 '''+hooks+r'''
 static void release_a_while_b_waits(void) { current=&a;telemetry_unlock();current=&b; }
 static void handoff_to_b_before_put_returns(void) { current=&b;telemetry_lock();current=&a; }
+static void checked_release_a_while_b_waits(void) { current=&a;assert(telemetry_router_leave());current=&b; }
+static void checked_handoff_b_before_put_returns(void) { current=&b;assert(telemetry_router_enter());current=&a; }
 int main(void) {
  for(unsigned round=0;round<10000;++round) {
   unsigned before_get=gets,before_put=puts;
@@ -75,12 +77,37 @@ int main(void) {
  g_telemetry_mutex_ready=0;telemetry_lock();telemetry_unlock();g_telemetry_mutex_ready=1;
  assert(gets==before_get && puts==before_put && !kernel_owner);
  telemetry_lock();telemetry_unlock();assert(!g_telemetry_owner.depth);
+ /* Checked C entry must retain the existing optimized SDK recursion: many
+  * SDK guards and an SDK callback re-entering C still use one kernel pair. */
+ unsigned checked_get=gets,checked_put=puts;
+ assert(telemetry_router_enter());
+ for(unsigned i=0;i<32;++i) { telemetry_lock();telemetry_unlock(); }
+ telemetry_lock();assert(telemetry_router_enter());telemetry_lock();telemetry_unlock();
+ assert(telemetry_router_leave());telemetry_unlock();
+ assert(gets==checked_get+1 && puts==checked_put && g_telemetry_owner.depth==1);
+ assert(telemetry_router_leave());
+ assert(gets==checked_get+1 && puts==checked_put+1 && !kernel_owner && !g_telemetry_owner.depth);
+ assert(telemetry_router_enter());current=&b;on_get=checked_release_a_while_b_waits;
+ assert(telemetry_router_enter() && kernel_owner==&b && atomic_load(&g_telemetry_owner.owner)==&b);
+ assert(telemetry_router_leave());current=&a;
+ assert(telemetry_router_enter());on_put=checked_handoff_b_before_put_returns;
+ assert(telemetry_router_leave());
+ assert(kernel_owner==&b && atomic_load(&g_telemetry_owner.owner)==&b && g_telemetry_owner.depth==1);
+ current=&b;assert(telemetry_router_leave());current=&a;
+ unsigned context_get=gets,context_put=puts;
+ isr=1;assert(!telemetry_router_enter());isr=0;
+ current=NULL;assert(!telemetry_router_enter());current=&a;
+ g_telemetry_mutex_ready=0;assert(!telemetry_router_enter());g_telemetry_mutex_ready=1;
+ assert(gets==context_get && puts==context_put && !atomic_load(&g_telemetry_owner.owner));
+ unsigned old_fail=g_telemetry_lock_get_fail;fail_get=1;assert(!telemetry_router_enter());fail_get=0;
+ assert(g_telemetry_lock_get_fail==old_fail+1 && !kernel_owner && !atomic_load(&g_telemetry_owner.owner));
+
 }
 '''
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);(root/'tx_api.h').write_text(stub)
             binary=root/'mutex'
-            subprocess.run(['cc','-std=c11','-O2','-Wall','-Wextra','-Werror','-fsanitize=address,undefined',
+            subprocess.run(['cc','-DTELEMETRY_ENABLED=1','-std=c11','-O2','-Wall','-Wextra','-Werror','-fsanitize=address,undefined',
                 '-I',str(root),'-I',str(ROOT/'Core/Inc'),'-x','c','-','-o',str(binary)],input=program,text=True,check=True)
             subprocess.run([str(binary)],check=True,timeout=10)
 if __name__=='__main__':unittest.main()

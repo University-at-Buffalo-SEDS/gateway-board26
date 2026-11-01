@@ -3,15 +3,20 @@ import subprocess
 import tempfile
 import unittest
 
+from checked_router_fixture import checked_hooks
+from router_lifecycle_fixture import function
+
 class PeerProbeTests(unittest.TestCase):
     def test_guarded_probe_lifetime_and_allocation_failure(self):
-        s=(Path(__file__).resolve().parents[1]/'Core/Src/telemetry.c').read_text();a=s.index('void telemetry_hil_capture_requested_snapshot(void) {');b=s.index('\nstatic uint64_t node_now_since_ms',a);func=s[a:b]
+        root=Path(__file__).resolve().parents[1]
+        s=(root/'Core/Src/telemetry.c').read_text();func='\n'.join(function(s,n)for n in ('telemetry_hil_capture_requested_snapshot_locked','telemetry_hil_capture_requested_snapshot'))
         code=r'''
         #include <stdint.h>
         #include <stddef.h>
         #include <assert.h>
         #include <string.h>
         #define SEDS_IO -14
+        #define TELEMETRY_ENABLED 1
         #define TELEMETRY_USE_TLSF 1
         static uint32_t g_gateway_peer_probe_request, peer_probe_tick, tick, allocations, frees, exports;
         static int32_t g_gateway_peer_probe_result;
@@ -31,7 +36,7 @@ class PeerProbeTests(unittest.TestCase):
         static int seds_router_export_client_stats(void *r,const char *peer,size_t len,char *p,size_t n){assert(r&&p==memory&&n==2048&&len==strlen(peer));exports++;strcpy(p,peer);return 0;}
         static int seds_router_export_memory_layout(void *r,char *p,size_t n){assert(r&&p==memory&&n==2048);exports++;strcpy(p,"layout");return 0;}
         static int seds_router_export_topology(void *r,char *p,size_t n){assert(r&&p==memory&&n==2048);exports++;strcpy(p,"topology");return 0;}
-        ''' +func+r'''
+        ''' +checked_hooks(root)+'\n'+func+r'''
         int main(void){
          telemetry_hil_capture_requested_snapshot();assert(allocations==0);
          tick=1000;telemetry_hil_capture_requested_snapshot();assert(allocations==0&&exports==0&&!locked);

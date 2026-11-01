@@ -1,6 +1,8 @@
 """Reclaim old queued work before CAN admission, never replay the new packet."""
 from pathlib import Path
 import subprocess,tempfile,unittest
+from checked_router_fixture import checked_hooks
+from router_lifecycle_fixture import function
 ROOT=Path(__file__).resolve().parents[1]
 class ReceiveReclaimTests(unittest.TestCase):
     def test_low_memory_dispatches_old_work_before_the_single_handoff(self):
@@ -12,6 +14,7 @@ class ReceiveReclaimTests(unittest.TestCase):
 #define TELEMETRY_ENABLED 1
 #define TELEMETRY_USE_TLSF 1
 #define SEDS_OK 0
+#define SEDS_BAD_ARG -2
 #define SEDS_ERR -1
 typedef int SedsResult;
 static struct{void*r;}g_router={(void*)1};static int g_can_side_id=2;
@@ -21,8 +24,9 @@ static size_t available=5572;
 static uint32_t g_gateway_admission_last_free,g_gateway_admission_last_additional,g_gateway_admission_last_largest;
 static uint8_t saved[49];
 static size_t telemetry_tlsf_available_bytes(void){return available;}
-static void telemetry_uart_process(void){assert(!locked);uart_runs++;if(uart_frees)available+=1024;}
-static SedsResult process_all_queues_timeout(uint32_t ms){assert(!locked&&ms==1);old_delivered++;available+=4096;return SEDS_OK;}
+static void telemetry_uart_process(void){assert(locked);uart_runs++;if(uart_frees)available+=1024;}
+int telemetry_router_enter(void);int telemetry_router_leave(void);
+static SedsResult process_all_queues_timeout(uint32_t ms){assert(locked&&ms==1);assert(telemetry_router_enter());old_delivered++;available+=4096;assert(telemetry_router_leave()&&locked);return SEDS_OK;}
 static size_t seds_memory_admission_rejected(void){return admission_rejected;}
 static int init_telemetry_router(void){return SEDS_OK;}
 static void telemetry_lock(void){assert(!locked);locked=1;}
@@ -34,7 +38,7 @@ static int seds_router_rx_packed_packet_to_queue_from_side(void*r,unsigned side,
  memcpy(saved,p,n);queued++;return SEDS_OK;
 }
 static int seds_router_rx_packed_packet_to_queue(void*r,const uint8_t*p,size_t n){return seds_router_rx_packed_packet_to_queue_from_side(r,2,p,n);}
-''' + source[start:end] + r'''
+''' + checked_hooks(ROOT)+'\n'+source[start:end] + r'''
 int main(void){
  uint8_t wire[4]={1,2,3,4};rx_asynchronous(wire,4);
  assert(handoffs==1&&queued==1&&old_delivered==1&&!errors&&!locked);

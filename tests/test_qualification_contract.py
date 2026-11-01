@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 
 import build
+from router_lifecycle_fixture import function as actual_function
 
 
 class QualificationContractTests(unittest.TestCase):
@@ -200,17 +201,12 @@ class QualificationContractTests(unittest.TestCase):
             "process_rx_queue_timeout",
             "process_all_queues_timeout",
         ):
-            marker = ("void " if function in ("telemetry_uart_handle_data", "rx_asynchronous")
-                      else "SedsResult ") + function
-            body = telemetry[telemetry.index(marker) :]
-            body = body[: body.index("\n}")]
-            self.assertIn("telemetry_lock();", body, function)
-            self.assertIn("telemetry_unlock();", body, function)
-
-        unix_time = telemetry[telemetry.index("uint64_t telemetry_unix_ms") :]
-        unix_time = unix_time[: unix_time.index("\n}")]
-        self.assertIn("telemetry_lock();", unix_time)
-        self.assertIn("telemetry_unlock();", unix_time)
+            body=actual_function(telemetry,function)
+            self.assertLess(body.index('telemetry_router_enter()'),body.index(function+'_locked('),function)
+            self.assertLess(body.index(function+'_locked('),body.index('telemetry_router_leave()'),function)
+        unix_time=actual_function(telemetry,'telemetry_unix_ms')
+        self.assertLess(unix_time.index('telemetry_router_enter()'),unix_time.index('telemetry_unix_ms_locked('))
+        self.assertLess(unix_time.index('telemetry_unix_ms_locked('),unix_time.index('telemetry_router_leave()'))
 
     def test_hil_router_snapshot_is_one_shot_and_not_in_production_by_default(self):
         root = Path(build.__file__).resolve().parent

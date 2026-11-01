@@ -1,6 +1,8 @@
 """Wire callbacks copy into network RX storage; foreground processing is separate."""
 from pathlib import Path
 import subprocess,tempfile,unittest
+from checked_router_fixture import checked_hooks
+from router_lifecycle_fixture import function
 ROOT=Path(__file__).resolve().parents[1]
 class AsyncReceiveTests(unittest.TestCase):
     def test_handoff_copies_wire_and_does_not_dispatch_in_can_callback(self):
@@ -15,6 +17,7 @@ class AsyncReceiveTests(unittest.TestCase):
 #include <stdlib.h>
 #define TELEMETRY_ENABLED 1
 #define SEDS_OK 0
+#define SEDS_BAD_ARG -2
 #define SEDS_ERR -1
 typedef int SedsResult;
 static struct { void *r; } g_router={(void*)1};
@@ -33,7 +36,7 @@ static int seds_router_rx_packed_packet_to_queue_from_side(void *r,unsigned side
 static int seds_router_rx_packed_packet_to_queue(void *r,const uint8_t *p,size_t n){return seds_router_rx_packed_packet_to_queue_from_side(r,2,p,n);}
 static int seds_router_receive_packed_from_side(void *r,unsigned side,const uint8_t *p,size_t n){(void)r;(void)side;(void)p;(void)n;abort();}
 static int seds_router_receive_packed(void *r,const uint8_t *p,size_t n){(void)r;(void)p;(void)n;abort();}
-"""+source[start:end]+r"""
+"""+checked_hooks(ROOT)+'\n'+source[start:end]+r"""
 int main(void){
  uint8_t wire[4]={1,2,3,4};rx_asynchronous(wire,4);
  assert(queued==1 && delivered==0 && owned_len==4);
@@ -56,7 +59,7 @@ int main(void){
 
     def test_uart_handoff_owns_bytes_and_defers_routing(self):
         source=(ROOT/"Core/Src/telemetry.c").read_text()
-        start=source.index("void telemetry_uart_handle_data")
+        start=source.index("static void telemetry_uart_handle_data_locked")
         end=source.index("static uint8_t telemetry_timesync_is_source", start)
         code=r"""
 #include <assert.h>
@@ -66,6 +69,7 @@ int main(void){
 #include <stdlib.h>
 #define TELEMETRY_ENABLED 1
 #define SEDS_OK 0
+#define SEDS_BAD_ARG -2
 typedef int SedsResult;
 static struct {void *r;} g_router={(void*)1};
 static int side=2,fail;
@@ -89,7 +93,7 @@ static int seds_router_rx_packed_packet_to_queue_from_side(void*r,unsigned id,co
 static int seds_router_rx_packed_packet_to_queue(void*r,const uint8_t*p,size_t n){return seds_router_rx_packed_packet_to_queue_from_side(r,2,p,n);}
 static int seds_router_receive_packed_from_side(void*r,unsigned id,const uint8_t*p,size_t n){(void)r;(void)id;(void)p;(void)n;abort();}
 static int seds_router_receive_packed(void*r,const uint8_t*p,size_t n){(void)r;(void)p;(void)n;abort();}
-"""+source[start:end]+r"""
+"""+checked_hooks(ROOT)+'\n'+source[start:end]+r"""
 int main(void){
  uint8_t wire[]={1,2,3,4};telemetry_uart_handle_data(wire,4);
  assert(queued==1 && success==1 && !errors);
