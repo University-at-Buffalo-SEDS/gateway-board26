@@ -69,7 +69,9 @@ extern DMA_HandleTypeDef hdma_usart2_tx;
 extern UART_HandleTypeDef hlpuart1;
 extern UART_HandleTypeDef huart1;
 extern UART_HandleTypeDef huart2;
+#if FIRMWARE_USB_DEBUG_ENABLED
 extern PCD_HandleTypeDef hpcd_USB_FS;
+#endif
 extern TIM_HandleTypeDef htim6;
 
 /* USER CODE BEGIN EV */
@@ -263,6 +265,7 @@ void DMA1_Channel7_IRQHandler(void)
 /**
   * @brief This function handles USB low priority interrupt remap.
   */
+#if FIRMWARE_USB_DEBUG_ENABLED
 void USB_LP_IRQHandler(void)
 {
   /* USER CODE BEGIN USB_LP_IRQn 0 */
@@ -273,6 +276,7 @@ void USB_LP_IRQHandler(void)
 
   /* USER CODE END USB_LP_IRQn 1 */
 }
+#endif
 
 /**
   * @brief This function handles USART1 global interrupt / USART1 wake-up interrupt through EXTI line 25.

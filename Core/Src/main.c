@@ -65,7 +65,9 @@ DMA_HandleTypeDef hdma_usart1_tx;
 DMA_HandleTypeDef hdma_usart2_rx;
 DMA_HandleTypeDef hdma_usart2_tx;
 
+#if FIRMWARE_USB_DEBUG_ENABLED
 PCD_HandleTypeDef hpcd_USB_FS;
+#endif
 
 DMA_HandleTypeDef hdma_dma_generator0;
 /* USER CODE BEGIN PV */
@@ -78,7 +80,9 @@ static void MX_DMA_Init(void);
 static void MX_GPIO_Init(void);
 static void MX_FDCAN2_Init(void);
 static void MX_I2C2_Init(void);
+#if FIRMWARE_USB_DEBUG_ENABLED
 static void MX_USB_PCD_Init(void);
+#endif
 static void MX_USART1_UART_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_LPUART1_UART_Init(void);
@@ -130,7 +134,9 @@ int main(void)
   MX_GPIO_Init();
   MX_FDCAN2_Init();
   MX_I2C2_Init();
+#if FIRMWARE_USB_DEBUG_ENABLED
   MX_USB_PCD_Init();
+#endif
   MX_USART1_UART_Init();
   MX_USART2_UART_Init();
   MX_LPUART1_UART_Init();
@@ -447,6 +453,7 @@ static void MX_USART2_UART_Init(void)
   * @param None
   * @retval None
   */
+#if FIRMWARE_USB_DEBUG_ENABLED
 static void MX_USB_PCD_Init(void)
 {
 
@@ -474,6 +481,7 @@ static void MX_USB_PCD_Init(void)
   /* USER CODE END USB_Init 2 */
 
 }
+#endif
 
 /**
   * Enable DMA controller clock

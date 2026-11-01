@@ -6,6 +6,7 @@
 // telemetry.c
 #include "telemetry.h"
 #include "flight_state_cache.h"
+#include "board_recovery_transport.h"
 #include "sim_network_probe.h"
 #include "board_can_priority.h"
 #include "gateway_status_probe.h"
@@ -885,6 +886,17 @@ SedsResult telemetry_poll_discovery(void) {
   return result;
 #endif
 }
+static SedsResult Board_Recovery_handler(const SedsPacketView *packet, void *user);
+
+static const SedsLocalEndpointDesc locals[] = {
+      {
+          .endpoint = SEDS_EP_BOARD_RECOVERY,
+          .packet_handler = Board_Recovery_handler,
+          .packed_handler = NULL,
+          .user = NULL,
+      },
+};
+
 static SedsResult init_telemetry_router_locked(void) {
 #ifndef TELEMETRY_ENABLED
   return SEDS_OK;
@@ -949,7 +961,7 @@ static SedsResult init_telemetry_router_locked(void) {
 
   /* Keep one clock origin through construction and initial queue service. */
   g_router.start_time = tx_raw_now_ms_locked();
-  r = seds_router_new(node_now_since_ms, NULL, NULL, 0U);
+  r = seds_router_new(node_now_since_ms, NULL, locals, sizeof(locals)/sizeof(locals[0]));
   if (!r) {
     printf("Error: failed to create router\r\n");
     g_router.r = NULL;
@@ -1043,6 +1055,7 @@ static SedsResult init_telemetry_router_locked(void) {
   /* The normal poll loop sends the initial schema after link startup. */
 
   g_router.r = r;
+  board_recovery_transport_set_router(r);
   (void)flight_state_cache_init(r);
   g_router.created = 1U;
   g_discovery_schema_announced = 0U;
@@ -1050,6 +1063,14 @@ static SedsResult init_telemetry_router_locked(void) {
   return SEDS_OK;
 #endif
 }
+
+static SedsResult Board_Recovery_handler(const SedsPacketView *packet, void *user)
+{
+  (void)user;
+  return board_recovery_handle(g_router.r, packet, SEDS_EP_BOARD_RECOVERY,
+      (uint32_t)(((uint64_t)tx_time_get() * 1000U) / TX_TIMER_TICKS_PER_SECOND));
+}
+
 
 SedsResult init_telemetry_router(void) {
   SedsResult result;
