@@ -43,6 +43,7 @@ typedef struct { int State; } FDCAN_HandleTypeDef;
 #define FDCAN_TX_BUFFER2 4U
 static struct { int waiting; } g_can_health;
 static unsigned g_can_healthy, g_can_recovering;
+static unsigned g_can_restart_pending, g_can_recovery_attempted;
 #define FDCAN_RX_FIFO0 0U
 #define FDCAN_RX_FIFO1 1U
 static FDCAN_HandleTypeDef *g_hfdcan;
