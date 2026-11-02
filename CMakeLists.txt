@@ -115,6 +115,7 @@ if(ENABLE_TELEMETRY)
         ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/telemetry.c
         ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/telemetry_hooks.c
         ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/telemetry_uart.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/uart_integrity.c
         ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/board_link_uart.c
     )
 endif()

@@ -201,6 +201,8 @@ static __attribute__((unused)) int radio_uart_subscribe_rx(void(*cb)(const uint8
 static __attribute__((unused)) SedsResult radio_tx_send(const uint8_t*p,size_t n,uint8_t pri,void*u){return tx_send_with_priority(p,n,pri,u);}
 static __attribute__((unused)) SedsResult telemetry_uart_tx_send(const uint8_t*p,size_t n,void*u){return tx_send_with_priority(p,n,0,u);}
 static __attribute__((unused)) void telemetry_uart_set_side_id(int32_t id){(void)id;}
+/* UART transport profile is covered by its real ring/parser fixture. */
+static __attribute__((unused)) void telemetry_uart_set_sedsnet_integrity(void){}
 static SedsResult telemetry_configure_timesync_locked(SedsRouter*r){assert(r);return fail_stage==2?SEDS_ERR:SEDS_OK;}
 static __attribute__((unused)) SedsResult av_bay_underglow_init(SedsRouter*r){assert(r);return SEDS_OK;}
 static __attribute__((unused)) SedsResult flight_buzzer_init(SedsRouter*r){assert(r);return SEDS_OK;}

@@ -1,4 +1,6 @@
 #include "telemetry_uart.h"
+#include "uart_integrity.h"
+#include "gateway_crc32.h"
 #include "uart_dma_rx.h"
 #include "gateway_status_probe.h"
 #include "sim_network_probe.h"
@@ -83,6 +85,9 @@ typedef struct {
 } TelemetryUartState;
 
 static TelemetryUartState g_telemetry_uart = {.side_id = -1};
+static UartIntegrityReader g_integrity_reader;
+static uint8_t g_sedsnet_integrity;
+
 volatile uint32_t g_gateway_uart_rx_frames = 0U;
 volatile uint32_t g_gateway_uart_tx_frames = 0U;
 volatile uint32_t g_gateway_uart_tx_failures = 0U;
@@ -634,6 +639,7 @@ SedsResult telemetry_uart_init(UART_HandleTypeDef *huart) {
   }
 
   memset(&g_telemetry_uart, 0, sizeof(g_telemetry_uart));
+  g_sedsnet_integrity = 0U;
   g_telemetry_uart.huart = huart;
   g_telemetry_uart.side_id = -1;
   HAL_GPIO_WritePin(GREEN_LED_GPIO_Port, GREEN_LED_Pin, GPIO_PIN_RESET);
@@ -642,24 +648,83 @@ SedsResult telemetry_uart_init(UART_HandleTypeDef *huart) {
   return SEDS_OK;
 }
 
+static bool telemetry_uart_data_crc(const uint8_t *bytes, size_t length) {
+  if (length < 8U) return false;
+  uint32_t state = UINT32_MAX;
+  if (!gateway_crc32_update(state, bytes, length - 4U, &state)) {
+    for (size_t i = 0; i < length - 4U; ++i) {
+      state ^= bytes[i];
+      for (unsigned bit = 0; bit < 8U; ++bit)
+        state = (state >> 1) ^ (UINT32_C(0xedb88320) & (0U - (state & 1U)));
+    }
+  }
+  const uint8_t *tail = bytes + length - 4U;
+  const uint32_t expected = (uint32_t)tail[0] | ((uint32_t)tail[1] << 8U) |
+      ((uint32_t)tail[2] << 16U) | ((uint32_t)tail[3] << 24U);
+  return ~state == expected;
+}
+static void telemetry_uart_integrity_emit(uint8_t kind, const uint8_t *bytes, size_t length) {
+  ++g_telemetry_uart.stats.rx_frame_count;
+  ++g_gateway_uart_rx_frames;
+  // Integrity is allocation-free. Central side-aware SDK validation still owns
+  // schema/admission checks exactly once. Never reinterpret valid data as UART.
+  telemetry_uart_dispatch_frame(kind, bytes, length);
+}
+void telemetry_uart_set_sedsnet_integrity(void) {
+  if (g_sedsnet_integrity) return;
+  uart_integrity_init(&g_integrity_reader, g_telemetry_uart.rx_frame,
+                      sizeof(g_telemetry_uart.rx_frame));
+  telemetry_uart_reset_rx();
+  g_sedsnet_integrity = 1U;
+}
+static bool telemetry_uart_strict_time_remaining(const void *context) {
+  const uint32_t started = *(const uint32_t *)context;
+  return (uint32_t)(HAL_GetTick() - started) < TELEMETRY_UART_RX_SERVICE_MS;
+}
+
+/* Returns false only for the legacy opaque profile. The strict window shares
+ * existing RX storage; CAN regains foreground service at the original deadline. */
+static bool telemetry_uart_service_strict_rx(uint32_t started) {
+  if (!g_sedsnet_integrity) return false;
+  unsigned serviced = 0U;
+  UartIntegrityBudget budget = {64U, 4096U};
+  for (;;) {
+    if (uart_integrity_drain_until(&g_integrity_reader, &budget,
+        telemetry_uart_data_crc, telemetry_uart_integrity_emit,
+        telemetry_uart_strict_time_remaining, &started) == UART_INTEGRITY_BUDGET)
+      break;
+    if (serviced >= TELEMETRY_UART_RX_SERVICE_BYTES ||
+        !telemetry_uart_strict_time_remaining(&started)) break;
+    unsigned added = 0U;
+    uint8_t byte;
+    /* No batching wait: preserve parser work and unpopped accepted ring bytes
+     * whenever the byte/time/scan/CRC budget ends this foreground slice. */
+    while (serviced < TELEMETRY_UART_RX_SERVICE_BYTES &&
+        telemetry_uart_strict_time_remaining(&started) &&
+        uart_integrity_space(&g_integrity_reader) && telemetry_uart_rx_ring_pop_byte(&byte)) {
+      (void)uart_integrity_push(&g_integrity_reader, byte);
+      ++g_telemetry_uart.stats.rx_byte_count;
+      ++serviced;
+      ++added;
+    }
+    if (!added) break;
+  }
+  return true;
+}
+
 void telemetry_uart_process(void) {
   uint8_t byte;
   unsigned serviced = 0U;
   const uint32_t started = HAL_GetTick();
-
-
-
-  while (serviced < TELEMETRY_UART_RX_SERVICE_BYTES &&
-         (uint32_t)(HAL_GetTick() - started) < TELEMETRY_UART_RX_SERVICE_MS &&
-         telemetry_uart_rx_ring_pop_byte(&byte)) {
-    telemetry_uart_process_rx_byte(byte);
-    ++serviced;
+  if (!telemetry_uart_service_strict_rx(started)) {
+    while (serviced < TELEMETRY_UART_RX_SERVICE_BYTES &&
+           (uint32_t)(HAL_GetTick() - started) < TELEMETRY_UART_RX_SERVICE_MS &&
+           telemetry_uart_rx_ring_pop_byte(&byte)) {
+      telemetry_uart_process_rx_byte(byte);
+      ++serviced;
+    }
   }
-
-  if (g_telemetry_uart.rx_dma_active == 0U) {
-    (void)telemetry_uart_start_rx_dma();
-  }
-
+  if (g_telemetry_uart.rx_dma_active == 0U) (void)telemetry_uart_start_rx_dma();
   telemetry_uart_flush_tx_queue();
 }
 

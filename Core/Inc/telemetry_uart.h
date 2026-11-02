@@ -59,6 +59,8 @@ uint32_t telemetry_uart_tx_frame_count(void);
 void telemetry_uart_get_stats(TelemetryUartStats *out);
 void telemetry_uart_note_deserialize_result(uint8_t success);
 
+/* Explicit SDK packed-side profile; opaque framing remains the init default. */
+void telemetry_uart_set_sedsnet_integrity(void);
 void telemetry_uart_set_side_id(int32_t side_id);
 int32_t telemetry_uart_side_id(void);
 

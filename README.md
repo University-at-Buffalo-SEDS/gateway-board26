@@ -184,3 +184,19 @@ TLSF allocation and compact packet stores are enabled by default in both `build.
 and direct CMake builds. Use `--allocator threadx --packet-store heap` for an
 explicit fallback; direct CMake accepts
 `-DTELEMETRY_USE_TLSF=OFF` and `-DSEDSNET_COMPACT_PACKET_STORE=OFF`. ThreadX still schedules all firmware tasks.
+
+## UART integrity recovery
+
+After a packed SEDSnet UART side is created, the Gateway enables the Data CRC32
+profile in its existing 1028-byte receive window. Initialization alone retains
+opaque framing. Failed Data checks and framing noise enter bounded retained-byte
+rescan; a valid Data frame restores alignment without resetting the link. Valid
+parents remain whole even when their payload contains UART magic. Local Command
+and raw ASCII frames inside a damaged span, including genuine diagnostics, are
+quarantined until valid Data restores framing. Clean-boundary commands retain
+their existing format. This is integrity checking, not authentication.
+
+Foreground receive keeps the existing 512-byte and 1 ms service limits, with
+bounded scan/CRC work. One already-started frame callback completes atomically;
+the next candidate waits when the deadline expires. These native controls do
+not establish physical UART timing or the historical outage's cause.

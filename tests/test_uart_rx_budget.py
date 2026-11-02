@@ -44,6 +44,7 @@ static unsigned refill;
 static uint32_t telemetry_uart_irq_save(void){return 0;}
 static void telemetry_uart_irq_restore(uint32_t n){(void)n;}
 static uint32_t HAL_GetTick(void){return tick;}
+static int telemetry_uart_service_strict_rx(uint32_t started){(void)started;return 0;}
 static void telemetry_uart_start_rx_dma(void){restarts++;g_telemetry_uart.rx_dma_active=1;}
 static void telemetry_uart_flush_tx_queue(void){flushes++;}
 static void telemetry_uart_rx_ring_push_isr(const uint8_t*,uint16_t);

@@ -1,3 +1,4 @@
+#include "gateway_crc32.h"
 /* Board-owned IEEE CRC acceleration. SEDSnet and wire format stay generic. */
 #include <stddef.h>
 #include <stdint.h>

@@ -1115,6 +1115,7 @@ static SedsResult init_telemetry_router_locked(void) {
       SEDS_SIDE_TRANSPORT_PROFILE_IPV6_LIKE, GATEWAY_UART_MAX_FRAME_BYTES,
       0U, GATEWAY_SIDE_TRANSPORT_TEMPLATES);
   telemetry_uart_set_side_id(uart_side_id);
+  if (uart_side_id >= 0) telemetry_uart_set_sedsnet_integrity();
   if (uart_side_id < 0) {
     printf("Error: failed to add UART side: %ld\r\n", (long)uart_side_id);
     telemetry_uart_set_side_id(-1);
