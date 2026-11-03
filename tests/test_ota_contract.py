@@ -34,7 +34,7 @@ class OtaContractTests(unittest.TestCase):
         self.assertEqual(chunk % alignment, 0)
         # MAX_STACK_PAYLOAD is an inline-storage threshold, not a wire limit.
         # Larger OTA payloads use the owned spill representation.
-        self.assertIn("len > 5U + OTA_STREAM_MAX_CHUNK", source)
+        self.assertRegex(source, r"\blen\s*>\s*5U\s*\+\s*OTA_STREAM_MAX_CHUNK\b")
         self.assertIn("seds_router_bind_p2p_stream_port", source)
         self.assertIn("launchcore_delta_update_finish", source)
         self.assertIn("launchcore_confirm_boot", source)
