@@ -1,3 +1,4 @@
+#include "persistent_store.h"
 /* USER CODE BEGIN Header */
 /**
  ******************************************************************************
@@ -99,6 +100,7 @@ UINT App_ThreadX_Init(VOID *memory_ptr)
   /* Initialize telemetry lock used by Rust (telemetry_lock/telemetry_unlock). */
   telemetry_init_lock();
 
+  (void)persistent_store_runtime_start();
   ret = create_telemetry_thread(byte_pool);
   if (ret != TX_SUCCESS)
   {

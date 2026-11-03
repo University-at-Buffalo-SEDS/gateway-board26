@@ -43,7 +43,7 @@ typedef struct { int State; } FDCAN_HandleTypeDef;
 #define FDCAN_TX_BUFFER2 4U
 static struct { int waiting; } g_can_health;
 static unsigned g_can_healthy, g_can_recovering;
-static unsigned g_can_restart_pending, g_can_recovery_attempted;
+static uint8_t g_can_restart_pending=1,g_can_recovery_attempted=1;
 #define FDCAN_RX_FIFO0 0U
 #define FDCAN_RX_FIFO1 1U
 static FDCAN_HandleTypeDef *g_hfdcan;
@@ -72,6 +72,7 @@ static void can_bus_drain_rx_fifo(FDCAN_HandleTypeDef *h, unsigned fifo) { asser
 int main(void) {
  FDCAN_HandleTypeDef h={0}, other={0};
  g_rx_head=99; g_rx_tail=88; can_bus_init(&h);
+ assert(!g_can_restart_pending&&!g_can_recovery_attempted);
  assert(starts==1 && g_rx_head==1 && notifications==63 && stops==0);
  HAL_FDCAN_RxFifo0Callback(&h,1); assert(drains[0]==1 && !g_fdcan_rx_hw_overflow_count);
  HAL_FDCAN_RxFifo0Callback(&h,4); assert(drains[0]==2 && g_fdcan_rx_hw_overflow_count==1);
