@@ -86,6 +86,11 @@ target_link_options(${CMAKE_PROJECT_NAME} PRIVATE
 
 # Add STM32CubeMX generated sources
 add_subdirectory(cmake/stm32cubemx)
+# newlib's isatty/fstat reach _isatty/_fstat only after LTO has already
+# dropped them as unused, so keep the syscall stubs as ordinary objects.
+set_source_files_properties(
+    ${CMAKE_SOURCE_DIR}/Core/Src/syscalls.c
+    PROPERTIES COMPILE_OPTIONS "$<$<CONFIG:Release>:-fno-lto>")
 # Use the scheduler's built-in idle wait; peripheral clocks stay running.
 # The Cortex-M4 assembly does not include tx_user.h, so set this on ThreadX.
 target_compile_definitions(ThreadX PRIVATE TX_ENABLE_WFI)
