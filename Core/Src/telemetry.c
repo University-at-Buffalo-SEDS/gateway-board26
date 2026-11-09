@@ -500,7 +500,7 @@ void telemetry_set_unix_time_ms(uint64_t unix_ms) {
 #ifdef SEDS_FIRMWARE_SIM_TEST
 /* Reuse the existing SIM-only failure snapshot until an OOM replaces it.
  * Keep the instrumented image within the physical SRAM budget. */
-extern volatile uint32_t g_telemetry_alloc_failure_stack[128];
+#include "sim_failure_snapshot.h"
 #define g_gateway_memory_counters g_telemetry_alloc_failure_stack
 #define g_gateway_queue_counters (g_telemetry_alloc_failure_stack + 20U)
 #else

@@ -29,6 +29,7 @@
 #include "can_transport_health.h"
 #include "main.h"
 #include "can_rx_admission.h"
+#include "sim_failure_snapshot.h"
 #include <stdint.h>
 #include <string.h>
 
@@ -306,12 +307,12 @@ static inline void record_first_rx_drop(void) {
     g_sim_can_first_drop_phase = g_sim_gateway_service_active;
     /* Read-only simulator evidence, reusing the unused tail of the existing
      * allocation-failure buffer. A later OOM may replace this diagnostic. */
-    extern volatile uint32_t g_telemetry_alloc_failure_stack[128];
+    enum { FRAME_WORDS = SIM_FAILURE_SNAPSHOT_WORDS - SIM_FAILURE_SNAPSHOT_CAN_FRAME_FIRST };
     const uintptr_t psp = __get_PSP();
-    if (psp >= 0x20000000U && psp <= 0x2001c000U - 256U) {
+    if (psp >= 0x20000000U && psp <= SIM_FAILURE_SNAPSHOT_RAM_END - 4U * FRAME_WORDS) {
       const volatile uint32_t *frame = (const volatile uint32_t *)psp;
-      for (unsigned i = 0; i < 64U; ++i)
-        g_telemetry_alloc_failure_stack[64U+i] = frame[i];
+      for (unsigned i = 0; i < FRAME_WORDS; ++i)
+        g_telemetry_alloc_failure_stack[SIM_FAILURE_SNAPSHOT_CAN_FRAME_FIRST+i] = frame[i];
       g_telemetry_alloc_failure_stack[62] = (uint32_t)psp;
       g_telemetry_alloc_failure_stack[63] = 0x43414e44U;
     }

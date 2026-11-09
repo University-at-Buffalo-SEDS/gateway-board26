@@ -7,6 +7,7 @@
 #include "main.h"
 #ifdef TELEMETRY_USE_TLSF
 #include "telemetry_tlsf.h"
+#include "sim_failure_snapshot.h"
 extern volatile uint32_t g_telemetry_tlsf_free_bytes;
 extern volatile uint32_t g_telemetry_tlsf_free_blocks;
 #endif
@@ -44,7 +45,7 @@ volatile uint32_t g_telemetry_max_alloc_request = 0U;
 volatile uint32_t g_telemetry_alloc_failure_request = 0U;
 #ifdef SEDS_FIRMWARE_SIM_TEST
 volatile uint32_t g_telemetry_alloc_failure_psp;
-volatile uint32_t g_telemetry_alloc_failure_stack[128];
+volatile uint32_t g_telemetry_alloc_failure_stack[SIM_FAILURE_SNAPSHOT_WORDS];
 #endif
 volatile uint32_t g_telemetry_alloc_failure_available = 0U;
 volatile uint32_t g_telemetry_alloc_failure_fragments = 0U;
@@ -274,9 +275,10 @@ void *telemetryMalloc(size_t xSize)
 #ifdef SEDS_FIRMWARE_SIM_TEST
         const uint32_t psp = __get_PSP();
         g_telemetry_alloc_failure_psp = psp;
-        if (psp >= 0x20000000U && psp <= 0x2001be00U) {
+        if (psp >= 0x20000000U &&
+            psp <= SIM_FAILURE_SNAPSHOT_RAM_END - 4U * SIM_FAILURE_SNAPSHOT_WORDS) {
             const volatile uint32_t *stack = (const volatile uint32_t *)(uintptr_t)psp;
-            for (unsigned i = 0; i < 128U; ++i) g_telemetry_alloc_failure_stack[i] = stack[i];
+            for (unsigned i = 0; i < SIM_FAILURE_SNAPSHOT_WORDS; ++i) g_telemetry_alloc_failure_stack[i] = stack[i];
         }
 #endif
         g_telemetry_alloc_failure_available = g_telemetry_tlsf_free_bytes;
