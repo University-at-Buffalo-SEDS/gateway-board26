@@ -9,6 +9,9 @@ SedsResult board_recovery_handle(SedsRouter *router,const SedsPacketView *packet
 /* Application replay floor; SDK stays generic. No current-time/RNG claim. */
 uint8_t board_recovery_command_is_stale(const SedsPacketView *packet);
 uint8_t board_recovery_managed_update_allowed(const SedsPacketView *packet);
+/* Delivered reliable packets deliberately refused (stale, unauthorized,
+ * malformed) yet acknowledged, so the sender stops retransmitting them. */
+extern volatile uint32_t g_reliable_refusal_count;
 uint8_t board_recovery_automatic_is_stale(const SedsPacketView *packet);
 /* Advance the station clock from an authorized GS packet's timestamp. */
 void board_recovery_observe_station_time(SedsRouter*router,const SedsPacketView*packet);

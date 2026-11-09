@@ -49,6 +49,7 @@ HARNESS = r'''
 #include <string.h>
 #include <stdio.h>
 volatile uint32_t g_telemetry_discovery_seen;
+volatile uint32_t g_reliable_refusal_count;
 static unsigned writes,invalidations,enables,registrations;
 static int fail_enable,fail_callback;
 static uint8_t stored=5;

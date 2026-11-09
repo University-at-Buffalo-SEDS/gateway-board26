@@ -142,17 +142,27 @@ static SedsResult persist_update(const SedsPacketView *packet, void *user)
         packet->payload[0] > FLIGHT_STATE_MAX_VALUE)
     {
         /* Public SDK435 caches managed data before invoking this callback.
-         * A malformed FSTATE must not poison future ordering/cache reads. */
-        if (packet != NULL && packet->ty == SEDS_DT_FLIGHT_STATE)
-            (void)clear_managed_cache();
+         * A malformed FSTATE must not poison future ordering/cache reads.
+         * Its retransmission is identical, so acknowledge it (counted). */
+        if (packet == NULL || packet->ty != SEDS_DT_FLIGHT_STATE) {
+            g_flight_state_cache_errors++;
+            return SEDS_HANDLER_ERROR;
+        }
+        (void)clear_managed_cache();
         g_flight_state_cache_errors++;
-        return SEDS_HANDLER_ERROR;
+        ++g_reliable_refusal_count;
+        return SEDS_OK;
     }
 
+    /* A delivered but refused write (non-station sender, stale, store not
+     * ready) is never applied or persisted, but it is acknowledged: a handler
+     * error withholds the SDK receipt and aborts the relay, so the station
+     * retransmitted the same refused packet forever. Retrying cannot help. */
     if (!board_recovery_managed_update_allowed(packet)) {
         (void)clear_managed_cache();
         ++g_flight_state_cache_errors;
-        return SEDS_HANDLER_ERROR;
+        ++g_reliable_refusal_count;
+        return SEDS_OK;
     }
     const uint8_t state = packet->payload[0];
     if (!ota_stream_state_begin(state)) {
