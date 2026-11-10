@@ -55,7 +55,7 @@ class RefusedReliableAckTests(unittest.TestCase):
     def test_allowed_write_is_applied_and_acknowledged(self):
         self.case('allowed')
 
-    def test_transient_storage_failure_stays_retryable(self):
+    def test_storage_failure_is_acknowledged_and_retried_by_the_poll(self):
         self.case('persist_fail')
 
 

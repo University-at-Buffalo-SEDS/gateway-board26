@@ -75,8 +75,13 @@ int main(int argc, char **argv)
     assert(seds_router_process_all_queues(r) == SEDS_OK);
     assert(writes == 0 && flight_state_cache_value() == 5);
   } else if (fail_write) {
-    /* A transient storage failure stays retryable: no receipt. */
-    assert(received != SEDS_OK && acks == 0 && g_reliable_refusal_count == 0);
+    /* A storage failure after the apply is acknowledged (a withheld receipt
+     * stalled the station's ordered FLIGHT_STATE stream); the poll retries
+     * durability once per second. */
+    assert(received == SEDS_OK && acks == 1 && flight_state_cache_value() == 3 &&
+           g_reliable_refusal_count == 0 && stored == 5);
+    fail_write = 0; clock_ms += 1000;
+    assert(flight_state_cache_poll(r) == SEDS_OK && stored == 3);
   } else {
     assert(!strcmp(mode, "allowed"));
     assert(received == SEDS_OK && acks == 1 && writes == 1 && stored == 3 &&

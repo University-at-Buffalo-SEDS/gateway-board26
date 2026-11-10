@@ -21,6 +21,7 @@ extern volatile uint32_t g_telemetry_discovery_seen;
 #define FLIGHT_STATE_MAX_VALUE 15U
 #define FLIGHT_STATE_ABORTED 15U
 #define FLIGHT_STATE_UNSYNCED_RETRY_MS 500U
+#define FLIGHT_STATE_PERSIST_RETRY_MS 1000U
 
 volatile uint32_t g_flight_state_cache_value __attribute__((used, externally_visible)) = 0U;
 volatile uint32_t g_flight_state_cache_restores __attribute__((used, externally_visible)) = 0U;
@@ -34,9 +35,17 @@ static bool g_has_value;
 #ifdef TELEMETRY_ENABLED
 static bool g_network_value_seen;
 static uint8_t g_persisted_state = UINT8_MAX;
+/* GET cadence while unseen; once a value is applied (and only then can a
+ * persist be pending) it paces the durability retry instead. */
 static uint32_t g_last_refresh_ms;
 static SedsRouter *g_cache_router;
 static SedsResult persist_update(const SedsPacketView *packet, void *user);
+/* An applied network value not yet durable; retried from the poll. Derived,
+ * so it costs no RAM: restore and the manual reset make them equal. */
+static bool persist_pending_now(void)
+{
+    return g_network_value_seen && g_persisted_state != (uint8_t)g_flight_state_cache_value;
+}
 /* SDK 4.3.6 caches inbound data before its callback. Retire only this
  * observation; keep read-only permissions, callbacks and advertisements. */
 static SedsResult clear_managed_cache(void)
@@ -142,6 +151,21 @@ int32_t flight_state_cache_reset_startup(void)
 }
 
 #ifdef TELEMETRY_ENABLED
+/* Caller holds the OTA owner. */
+static void persist_pending(void)
+{
+    const uint8_t state = (uint8_t)g_flight_state_cache_value;
+    if (!g_persist_ready) g_persist_ready = persistent_store_init() == LAUNCHCORE_PERSIST_OK;
+    if (!g_persist_ready ||
+        persistent_store_set(FLIGHT_STATE_PERSIST_KEY, &state, sizeof(state)) !=
+            LAUNCHCORE_PERSIST_OK) {
+        g_flight_state_cache_errors++;
+        return;
+    }
+    g_persisted_state = state;
+    g_flight_state_cache_writes++;
+}
+
 static SedsResult persist_update(const SedsPacketView *packet, void *user)
 {
     (void)user;
@@ -176,14 +200,12 @@ static SedsResult persist_update(const SedsPacketView *packet, void *user)
     /* An applied change to Aborted pushes one status to the station. */
     const bool aborting = state == FLIGHT_STATE_ABORTED &&
         !(g_has_value && g_flight_state_cache_value == FLIGHT_STATE_ABORTED);
-    if (!ota_stream_state_begin(state)) {
-        (void)clear_managed_cache();
-        ++g_flight_state_cache_errors;
-        return SEDS_HANDLER_ERROR;
-    }
+    /* Taking the OTA owner applies its inhibition even when busy; busy only
+     * means flash is not ours now, so durability waits for the poll. */
+    const bool owner = ota_stream_state_begin(state);
     const SedsResult apply_result = flight_state_cache_apply_network_update(packet);
     if (apply_result != SEDS_OK) {
-        ota_stream_state_end();
+        if (owner) ota_stream_state_end();
         (void)clear_managed_cache();
         g_flight_state_cache_errors++;
         return apply_result;
@@ -194,24 +216,15 @@ static SedsResult persist_update(const SedsPacketView *packet, void *user)
     g_flight_state_cache_value = state;
     g_flight_state_cache_updates++;
     if (aborting) (void)board_recovery_push_abort_status(g_cache_router);
-    if (!changed) { ota_stream_state_end(); return SEDS_OK; }
-
-    if (!g_persist_ready ||
-        persistent_store_set(FLIGHT_STATE_PERSIST_KEY, &state,
-                             sizeof(state)) != LAUNCHCORE_PERSIST_OK)
-    {
-        /* Preserve the existing volatile apply-before-persist policy, but
-         * retire the SDK cache so an identical reliable retry re-enters this
-         * callback instead of being accepted without retrying durability.
-         * g_network_value_seen is unchanged: no extra polling traffic. */
-        (void)clear_managed_cache();
-        g_flight_state_cache_errors++;
-        ota_stream_state_end();
-        return SEDS_HANDLER_ERROR;
+    if (changed) {
+        /* Applied: acknowledge it whatever flash does. An error withholds
+         * the receipt and stalls the station's ordered FLIGHT_STATE stream
+         * (Aborted included) behind this write. */
+        g_last_refresh_ms = HAL_GetTick();
+        if (owner) persist_pending();
+        else g_flight_state_cache_errors++;
     }
-    g_persisted_state = state;
-    g_flight_state_cache_writes++;
-    ota_stream_state_end();
+    if (owner) ota_stream_state_end();
     return SEDS_OK;
 }
 
@@ -236,9 +249,17 @@ SedsResult flight_state_cache_init(SedsRouter *router)
 SedsResult flight_state_cache_poll(SedsRouter *router)
 {
     if (router == NULL) return SEDS_BAD_ARG;
+    const uint32_t now_ms = HAL_GetTick();
+    if (persist_pending_now() &&
+        (uint32_t)(now_ms - g_last_refresh_ms) >= FLIGHT_STATE_PERSIST_RETRY_MS) {
+        g_last_refresh_ms = now_ms;
+        if (ota_stream_state_begin((uint8_t)g_flight_state_cache_value)) {
+            persist_pending();
+            ota_stream_state_end();
+        }
+    }
     if (g_network_value_seen) return SEDS_OK;
     if (g_telemetry_discovery_seen == 0U) return SEDS_OK;
-    const uint32_t now_ms = HAL_GetTick();
     if ((uint32_t)(now_ms - g_last_refresh_ms) <
         FLIGHT_STATE_UNSYNCED_RETRY_MS) return SEDS_OK;
     g_last_refresh_ms = now_ms;
