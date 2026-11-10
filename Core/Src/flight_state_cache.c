@@ -19,6 +19,7 @@ extern volatile uint32_t g_telemetry_discovery_seen;
 
 #define FLIGHT_STATE_PERSIST_KEY 0x46535445u
 #define FLIGHT_STATE_MAX_VALUE 15U
+#define FLIGHT_STATE_ABORTED 15U
 #define FLIGHT_STATE_UNSYNCED_RETRY_MS 500U
 
 volatile uint32_t g_flight_state_cache_value __attribute__((used, externally_visible)) = 0U;
@@ -51,6 +52,13 @@ __attribute__((weak)) SedsResult
 flight_state_cache_apply_network_update(const SedsPacketView *packet)
 {
     (void)packet;
+    return SEDS_OK;
+}
+/* board_recovery_transport.c owns the definition. */
+__attribute__((weak)) SedsResult
+board_recovery_push_abort_status(SedsRouter *router)
+{
+    (void)router;
     return SEDS_OK;
 }
 
@@ -165,6 +173,9 @@ static SedsResult persist_update(const SedsPacketView *packet, void *user)
         return SEDS_OK;
     }
     const uint8_t state = packet->payload[0];
+    /* An applied change to Aborted pushes one status to the station. */
+    const bool aborting = state == FLIGHT_STATE_ABORTED &&
+        !(g_has_value && g_flight_state_cache_value == FLIGHT_STATE_ABORTED);
     if (!ota_stream_state_begin(state)) {
         (void)clear_managed_cache();
         ++g_flight_state_cache_errors;
@@ -182,6 +193,7 @@ static SedsResult persist_update(const SedsPacketView *packet, void *user)
     g_network_value_seen = true;
     g_flight_state_cache_value = state;
     g_flight_state_cache_updates++;
+    if (aborting) (void)board_recovery_push_abort_status(g_cache_router);
     if (!changed) { ota_stream_state_end(); return SEDS_OK; }
 
     if (!g_persist_ready ||
