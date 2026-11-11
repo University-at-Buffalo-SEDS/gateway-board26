@@ -84,7 +84,10 @@ typedef struct {
   TelemetryUartStats stats;
 } TelemetryUartState;
 
-static TelemetryUartState g_telemetry_uart = {.side_id = -1};
+/* Zero-initialised (.bss). An initialiser here placed all 11 KiB in .data
+ * and kept a flash copy of its zero bytes. side_id's -1 default is set by
+ * telemetry_uart_init(), which runs before any reader of the side id. */
+static TelemetryUartState g_telemetry_uart;
 static UartIntegrityReader g_integrity_reader;
 static uint8_t g_sedsnet_integrity;
 
