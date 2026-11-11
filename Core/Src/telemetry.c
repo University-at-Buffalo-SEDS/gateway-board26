@@ -1501,6 +1501,29 @@ SedsResult process_all_queues_timeout(uint32_t timeout_ms) {
   return result;
 }
 
+/* Router receive/transmit queue depths in packets. The SDK copy is
+ * allocation-free and walks only the bounded queues. */
+void telemetry_router_queue_depth(uint32_t *rx, uint32_t *tx) {
+  uint32_t words[3] = {0U, 0U, 0U};
+#ifdef TELEMETRY_ENABLED
+  if (g_router.r && telemetry_router_enter()) {
+    if (seds_router_copy_queue_counters(g_router.r, words, 3U) < 3) {
+      words[1] = 0U;
+      words[2] = 0U;
+    }
+    (void)telemetry_router_leave();
+  }
+#endif
+  if (rx) *rx = words[1];
+  if (tx) *tx = words[2];
+}
+
+uint32_t telemetry_router_rx_backlog(void) {
+  uint32_t rx = 0U;
+  telemetry_router_queue_depth(&rx, NULL);
+  return rx;
+}
+
 
 static SedsResult log_error_impl_locked(uint8_t queue, const char *fmt, va_list args) {
   va_list args_copy;

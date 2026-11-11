@@ -56,6 +56,22 @@ static void telemetry_wait_for_activity(void) {
 #define TELEMETRY_CAN_SERVICE_BUDGET_MS 8U
 #define TELEMETRY_CAN_SLICE_BUDGET_MS 2U
 #define TELEMETRY_MAINTENANCE_PERIOD_MS 50U
+/* Router receive-queue depth above which CAN frames stay in the cheap
+ * ISR ring. Dispatch costs about five times a handoff, so unpaced 16-frame
+ * batches filled the router queue; once its budget was exhausted every
+ * further handoff paid for victim selection and forwarding collapsed to
+ * about a third of capacity (docs/throughput.md). */
+#define TELEMETRY_ROUTER_RX_HIGH_WATER 8U
+
+/* Frames the next CAN slice may hand to the router. Zero still services CAN
+ * recovery, reassembly expiry and the transmit queue. */
+static uint32_t telemetry_can_handoff_room(void)
+{
+    const uint32_t backlog = telemetry_router_rx_backlog();
+    if (backlog >= TELEMETRY_ROUTER_RX_HIGH_WATER) return 0U;
+    const uint32_t room = TELEMETRY_ROUTER_RX_HIGH_WATER - backlog;
+    return room < TELEMETRY_CAN_FRAMES_PER_SLICE ? room : TELEMETRY_CAN_FRAMES_PER_SLICE;
+}
 
 volatile uint32_t g_telemetry_stack_remaining = TELEMETRY_THREAD_STACK_SIZE;
 volatile uint32_t g_gateway_telemetry_loop_count = 0U;
@@ -136,8 +152,9 @@ void telemetry_thread_entry(ULONG initial_input)
         const uint32_t can_started = HAL_GetTick();
         do {
             uint32_t received;
+            const uint32_t room = telemetry_can_handoff_room();
             SERVICE(1, received = can_bus_process_rx_for(
-                TELEMETRY_CAN_FRAMES_PER_SLICE, TELEMETRY_CAN_SLICE_BUDGET_MS));
+                room, TELEMETRY_CAN_SLICE_BUDGET_MS));
             SERVICE(0, telemetry_uart_process());
             /* Service queued RX as well as TX between CAN batches. A TX-only
              * pass would strand the asynchronous handoff and overflow it. */
@@ -146,7 +163,8 @@ void telemetry_thread_entry(ULONG initial_input)
              * next one, so dispatch can release its memory. UART, maintenance
              * and the scheduler still run under the outer wall-time bound. */
             SERVICE(2, (void)process_all_queues_timeout(TELEMETRY_QUEUE_SERVICE_BUDGET_MS));
-            if (received == 0U || can_bus_rx_pending() == 0U) break;
+            /* A paced slice keeps dispatching until the router has room. */
+            if ((room != 0U && received == 0U) || can_bus_rx_pending() == 0U) break;
         } while ((uint32_t)(HAL_GetTick() - can_started) < TELEMETRY_CAN_SERVICE_BUDGET_MS);
         const uint32_t now = HAL_GetTick();
         if ((int32_t)(now - maintenance_due) >= 0) {
@@ -165,11 +183,12 @@ void telemetry_thread_entry(ULONG initial_input)
                 const uint32_t catchup_started = HAL_GetTick();
                 do {
                     uint32_t received;
+                    const uint32_t room = telemetry_can_handoff_room();
                     SERVICE(1, received = can_bus_process_rx_for(
-                        TELEMETRY_CAN_FRAMES_PER_SLICE, TELEMETRY_CAN_SLICE_BUDGET_MS));
+                        room, TELEMETRY_CAN_SLICE_BUDGET_MS));
                     SERVICE(0, telemetry_uart_process());
                     SERVICE(2, (void)process_all_queues_timeout(TELEMETRY_QUEUE_SERVICE_BUDGET_MS));
-                    if (received == 0U || can_bus_rx_pending() == 0U) break;
+                    if ((room != 0U && received == 0U) || can_bus_rx_pending() == 0U) break;
                 } while ((uint32_t)(HAL_GetTick() - catchup_started) < TELEMETRY_CAN_SERVICE_BUDGET_MS);
             }
         }

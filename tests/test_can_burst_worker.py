@@ -39,6 +39,8 @@ static int dispatch_tx_queue_timeout(unsigned n) {
     return 0;
 }
 static unsigned can_bus_rx_pending(void) { return pending; }
+// Router receive-queue depth used to pace CAN handoffs.
+static unsigned telemetry_router_rx_backlog(void) { return network_pending; }
 static unsigned can_bus_process_rx_for(unsigned count, unsigned ms) {
     unsigned n = count < pending ? count : pending;
     pending -= n; frames += n;
@@ -104,23 +106,26 @@ int main(void) {
     // Dispatch after one handoff batch even while CAN still has a backlog.
     // Do not relax queue capacity or extend the worker's wall-time budget.
     assert(handoff_drops == 0);
-    assert(first_network_pending == 24);
+    // One paced batch (router high water: 8 packets) precedes dispatch.
+    assert(first_network_pending == 40 - 8);
     assert(pending == 0 && frames == 40);
     reset(0); pending=0; inject_maintenance_burst=1;
     if (!setjmp(completed)) telemetry_thread_entry(0);
     assert(frames == 32 && pending == 0 && network_pending == 0 && handoff_drops == 0);
     reset(1); inject_maintenance_burst=1;
     if (!setjmp(completed)) telemetry_thread_entry(0);
-    assert(network_calls == 6 && frames == 96 && handoff_drops == 0 && network_pending == 0);
+    // Each slice hands over at most the router high water (8 packets); this
+    // model's dispatch call costs a whole CAN budget, so one slice per cycle.
+    assert(network_calls == 6 && frames == 48 && handoff_drops == 0 && network_pending == 0);
     reset(1);
     if (!setjmp(completed)) telemetry_thread_entry(0);
     // A continuously replenished ring services each handoff once and yields;
     // do not repeat discovery maintenance after the bounded combined pass.
-    assert(network_calls == 5 && frames == 80 && handoff_drops == 0 && network_pending == 0);
+    assert(network_calls == 5 && frames == 40 && handoff_drops == 0 && network_pending == 0);
     assert(first_network_pending == 40);
     ticks=UINT32_MAX-3; network_calls=cycles=frames=0;
     if (!setjmp(completed)) telemetry_thread_entry(0);
-    assert(network_calls == 5 && frames == 80 && handoff_drops == 0 && network_pending == 0);
+    assert(network_calls == 5 && frames == 40 && handoff_drops == 0 && network_pending == 0);
 }
 '''
         with tempfile.TemporaryDirectory() as tmp:
