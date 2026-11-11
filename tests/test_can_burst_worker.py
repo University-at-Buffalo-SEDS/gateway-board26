@@ -39,8 +39,13 @@ static int dispatch_tx_queue_timeout(unsigned n) {
     return 0;
 }
 static unsigned can_bus_rx_pending(void) { return pending; }
-// Router receive-queue depth used to pace CAN handoffs.
+// Router queue depths pace CAN handoffs and detect a stalled transmit queue.
 static unsigned telemetry_router_rx_backlog(void) { return network_pending; }
+static void telemetry_router_queue_depth(uint32_t *rx, uint32_t *tx) {
+    if (rx) *rx = network_pending;
+    if (tx) *tx = 0;
+}
+static uint32_t telemetry_egress_count(void) { return network_calls; }
 static unsigned can_bus_process_rx_for(unsigned count, unsigned ms) {
     unsigned n = count < pending ? count : pending;
     pending -= n; frames += n;

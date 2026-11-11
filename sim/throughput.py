@@ -47,8 +47,8 @@ OVERLOAD_MIN_FRACTION = 0.9
 # losses after the router accepted them.
 RING_SHED_FRACTION = 0.99
 # GroundStation unreachable and no traffic: the router re-pops its own
-# unroutable reliable packets with no backoff. Relative CPU busy before the
-# gateway-side backoff was about 64%.
+# unroutable reliable packets with no backoff. Relative CPU busy was 61%
+# before the gateway-side backoff and 15% after it.
 IDLE_FPS = 1
 IDLE_MAX_BUSY = 0.25
 

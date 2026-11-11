@@ -73,6 +73,49 @@ static uint32_t telemetry_can_handoff_room(void)
     return room < TELEMETRY_CAN_FRAMES_PER_SLICE ? room : TELEMETRY_CAN_FRAMES_PER_SLICE;
 }
 
+/* SEDSnet's drain loop re-pops a queued packet it cannot route (the
+ * gateway's own reliable telemetry while GroundStation is unreachable, e.g.
+ * Pico link down) with no backoff, so every call spends its whole budget:
+ * 60% or more of the CPU with no traffic (docs/throughput.md). After a
+ * full-budget call that queued no egress and left only transmit work,
+ * transmit-only service waits TELEMETRY_STALLED_QUEUE_RETRY_MS unless the
+ * transmit queue changes. Receive work is never deferred. */
+#define TELEMETRY_STALLED_QUEUE_RETRY_MS 10U
+volatile uint32_t g_gateway_queue_stalls;
+volatile uint32_t g_gateway_queue_stall_skips;
+static uint8_t telemetry_queue_stalled;
+static uint32_t telemetry_queue_stalled_tx;
+static uint32_t telemetry_queue_retry_at;
+
+static void telemetry_service_queues(uint8_t transmit_only)
+{
+    if (telemetry_queue_stalled) {
+        uint32_t rx = 0U, tx = 0U;
+        telemetry_router_queue_depth(&rx, &tx);
+        if (rx == 0U && tx == telemetry_queue_stalled_tx &&
+            (int32_t)(HAL_GetTick() - telemetry_queue_retry_at) < 0) {
+            ++g_gateway_queue_stall_skips;
+            return;
+        }
+    }
+    const uint32_t egress = telemetry_egress_count();
+    const uint32_t started = HAL_GetTick();
+    if (transmit_only)
+        (void)dispatch_tx_queue_timeout(TELEMETRY_QUEUE_SERVICE_BUDGET_MS);
+    else
+        (void)process_all_queues_timeout(TELEMETRY_QUEUE_SERVICE_BUDGET_MS);
+    telemetry_queue_stalled = 0U;
+    if ((uint32_t)(HAL_GetTick() - started) < TELEMETRY_QUEUE_SERVICE_BUDGET_MS ||
+        telemetry_egress_count() != egress) return;
+    uint32_t rx = 0U, tx = 0U;
+    telemetry_router_queue_depth(&rx, &tx);
+    if (rx != 0U || tx == 0U) return;
+    telemetry_queue_stalled = 1U;
+    telemetry_queue_stalled_tx = tx;
+    telemetry_queue_retry_at = HAL_GetTick() + TELEMETRY_STALLED_QUEUE_RETRY_MS;
+    ++g_gateway_queue_stalls;
+}
+
 volatile uint32_t g_telemetry_stack_remaining = TELEMETRY_THREAD_STACK_SIZE;
 volatile uint32_t g_gateway_telemetry_loop_count = 0U;
 /* Milliseconds accumulated in UART, CAN, queues, discovery, time, OTA, sleep. */
@@ -142,7 +185,7 @@ void telemetry_thread_entry(ULONG initial_input)
          * not place that work in front of an already-arrived CAN burst. The
          * bounded combined service below still guarantees RX/TX progress. */
         if (can_bus_rx_pending() < 16U)
-            SERVICE(2, (void)dispatch_tx_queue_timeout(TELEMETRY_QUEUE_SERVICE_BUDGET_MS));
+            SERVICE(2, telemetry_service_queues(1U));
 #ifdef TELEMETRY_BOARD_LINK_UART
         board_link_uart_process();
 #endif
@@ -162,7 +205,7 @@ void telemetry_thread_entry(ULONG initial_input)
              * packets. Service each bounded handoff batch before copying the
              * next one, so dispatch can release its memory. UART, maintenance
              * and the scheduler still run under the outer wall-time bound. */
-            SERVICE(2, (void)process_all_queues_timeout(TELEMETRY_QUEUE_SERVICE_BUDGET_MS));
+            SERVICE(2, telemetry_service_queues(0U));
             /* A paced slice keeps dispatching until the router has room. */
             if ((room != 0U && received == 0U) || can_bus_rx_pending() == 0U) break;
         } while ((uint32_t)(HAL_GetTick() - can_started) < TELEMETRY_CAN_SERVICE_BUDGET_MS);
@@ -187,7 +230,7 @@ void telemetry_thread_entry(ULONG initial_input)
                     SERVICE(1, received = can_bus_process_rx_for(
                         room, TELEMETRY_CAN_SLICE_BUDGET_MS));
                     SERVICE(0, telemetry_uart_process());
-                    SERVICE(2, (void)process_all_queues_timeout(TELEMETRY_QUEUE_SERVICE_BUDGET_MS));
+                    SERVICE(2, telemetry_service_queues(0U));
                     if ((room != 0U && received == 0U) || can_bus_rx_pending() == 0U) break;
                 } while ((uint32_t)(HAL_GetTick() - catchup_started) < TELEMETRY_CAN_SERVICE_BUDGET_MS);
             }

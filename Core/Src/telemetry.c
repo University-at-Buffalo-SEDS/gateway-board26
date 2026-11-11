@@ -1524,6 +1524,15 @@ uint32_t telemetry_router_rx_backlog(void) {
   return rx;
 }
 
+/* Changes whenever the UART or CAN egress queue accepts a packet: UART
+ * enqueues, plus CAN packets queued or already handed to the controller. */
+uint32_t telemetry_egress_count(void) {
+  extern volatile uint32_t g_gateway_uart_tx_enqueued;
+  extern volatile uint32_t g_can_tx_submitted;
+  extern volatile uint32_t g_can_tx_pending;
+  return g_gateway_uart_tx_enqueued + g_can_tx_submitted + g_can_tx_pending;
+}
+
 
 static SedsResult log_error_impl_locked(uint8_t queue, const char *fmt, va_list args) {
   va_list args_copy;

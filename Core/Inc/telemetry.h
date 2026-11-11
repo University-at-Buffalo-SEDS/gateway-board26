@@ -46,9 +46,11 @@ SedsResult process_rx_queue(void);
 SedsResult dispatch_tx_queue_timeout(uint32_t timeout_ms);
 SedsResult process_rx_queue_timeout(uint32_t timeout_ms);
 SedsResult process_all_queues_timeout(uint32_t timeout_ms);
-/* Router queue depths (packets), for ingress pacing. */
+/* Router queue depths (packets), for ingress pacing and stall detection. */
 void telemetry_router_queue_depth(uint32_t *rx, uint32_t *tx);
 uint32_t telemetry_router_rx_backlog(void);
+/* Changes whenever the UART or CAN egress queue accepts a packet. */
+uint32_t telemetry_egress_count(void);
 
 SedsResult print_telemetry_error(int32_t error_code);
 SedsResult log_error_asynchronous(const char *fmt, ...);
