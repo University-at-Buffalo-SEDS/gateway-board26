@@ -323,6 +323,12 @@ static inline void record_first_rx_drop(void) {
 #define record_first_rx_drop() ((void)0)
 #endif
 
+/* Queued frames per known board token (1..7), kept in step with every
+ * push/pop/replacement so a full-ring arrival does not rescan 192 slots in
+ * the ISR. Producer (ISR) and consumer (IRQs masked) never interleave; the
+ * consumer zeroes them whenever it empties the ring. */
+static uint8_t g_rx_sender_occupancy[8];
+
 static inline int __attribute__((unused)) rb_is_empty(void) {
   return g_rx_head == g_rx_tail;
 }
@@ -345,14 +351,18 @@ static inline int rb_replace_dominant(uint32_t std_id, const uint8_t *data,
   const unsigned incoming = can_rx_sender_index(std_id);
   if (incoming == 0U || incoming >= 8U) return 0;
   const uint16_t tail = g_rx_tail, head = g_rx_head;
-  uint8_t counts[8] = {0};
-  for (uint16_t i = tail; i != head; i = rb_next(i)) {
-    const unsigned peer = can_rx_sender_index(g_rx_ring[i].std_id);
-    if (peer > 0U && peer < 8U) ++counts[peer];
-  }
+  const uint8_t *const counts = g_rx_sender_occupancy;
   uint16_t victim = CAN_BUS_RX_RING_DEPTH;
   /* Control must displace telemetry even from its own dominant sender. */
   const unsigned priority = std_id < 0x100U;
+  if (!priority) {
+    /* Telemetry only displaces a board holding more slots than its own
+     * sender; with none, the scan below cannot find a victim. */
+    unsigned dominant = 0U;
+    for (unsigned peer = 1U; peer < 8U; ++peer)
+      if (peer != incoming && counts[peer] > dominant) dominant = counts[peer];
+    if (dominant <= counts[incoming]) return 0;
+  }
   unsigned largest = priority ? 0U : counts[incoming];
   for (uint16_t i = rb_next(tail); i != head; i = rb_next(i)) {
     const unsigned peer = can_rx_sender_index(g_rx_ring[i].std_id);
@@ -379,6 +389,8 @@ static inline int rb_replace_dominant(uint32_t std_id, const uint8_t *data,
   g_rx_ring[last].len = len;
   memcpy(g_rx_ring[last].data, data, len);
   __DMB();
+  --g_rx_sender_occupancy[evicted_peer];
+  ++g_rx_sender_occupancy[incoming];
   ++g_can_rx_sender_dropped[evicted_peer];
   ++g_can_rx_peer_dropped;
   record_first_rx_drop();
@@ -427,6 +439,7 @@ static inline void rb_push(uint32_t std_id, const uint8_t *data, uint8_t len) {
   g_rx_ring[h].std_id = std_id;
   g_rx_ring[h].len = len;
   memcpy(g_rx_ring[h].data, data, len);
+  if (sender_known) ++g_rx_sender_occupancy[sender];
 
   __DMB(); // publish slot before updating head (release)
   g_rx_head = rb_next(h);
@@ -451,7 +464,12 @@ static inline int rb_pop(can_bus_rx_frame_t *out)
   /* Priority eviction can move occupied slots in the ISR. Protect this copy. */
   __DMB();
   *out = g_rx_ring[t];
+  const unsigned sender = can_rx_sender_index(out->std_id);
+  if (sender > 0U && sender < 8U) --g_rx_sender_occupancy[sender];
   g_rx_tail = rb_next(t);
+  /* An empty ring has no occupancy; re-anchor the counts at every drain. */
+  if (g_rx_tail == g_rx_head)
+    for (unsigned i = 0U; i < 8U; ++i) g_rx_sender_occupancy[i] = 0U;
   __DMB();
   __set_PRIMASK(irq_mask);
   return 1;
