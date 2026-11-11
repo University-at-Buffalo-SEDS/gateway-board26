@@ -67,6 +67,12 @@ sources with SEDSNet, LaunchCore, its generated linker scripts, persistence, and
 the simulator probes. After generation, run
 `python3 build.py test --full --release` before flashing or committing.
 
+## Throughput measurement
+
+[Gateway throughput measurement](docs/throughput.md): DWT cycle-profile and
+synthetic-load builds, the `sim/throughput.py` scenario (600 frames/s target)
+and the bench procedure for real-cycle numbers.
+
 ## Hardware watchdog
 
 [Board watchdog configuration and validation](docs/watchdog.md). Build with

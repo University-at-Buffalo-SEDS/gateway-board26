@@ -23,6 +23,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "main.h"
+#include "gateway_cycle_profile.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -212,11 +213,11 @@ void DMA1_Channel3_IRQHandler(void)
 void DMA1_Channel4_IRQHandler(void)
 {
   /* USER CODE BEGIN DMA1_Channel4_IRQn 0 */
-
+  GCP_BEGIN(gcp_start);
   /* USER CODE END DMA1_Channel4_IRQn 0 */
   HAL_DMA_IRQHandler(&hdma_usart2_rx);
   /* USER CODE BEGIN DMA1_Channel4_IRQn 1 */
-
+  GCP_END(GCP_UART_ISR, gcp_start);
   /* USER CODE END DMA1_Channel4_IRQn 1 */
 }
 
@@ -226,11 +227,11 @@ void DMA1_Channel4_IRQHandler(void)
 void DMA1_Channel5_IRQHandler(void)
 {
   /* USER CODE BEGIN DMA1_Channel5_IRQn 0 */
-
+  GCP_BEGIN(gcp_start);
   /* USER CODE END DMA1_Channel5_IRQn 0 */
   HAL_DMA_IRQHandler(&hdma_usart2_tx);
   /* USER CODE BEGIN DMA1_Channel5_IRQn 1 */
-
+  GCP_END(GCP_UART_ISR, gcp_start);
   /* USER CODE END DMA1_Channel5_IRQn 1 */
 }
 
@@ -298,11 +299,11 @@ void USART1_IRQHandler(void)
 void USART2_IRQHandler(void)
 {
   /* USER CODE BEGIN USART2_IRQn 0 */
-
+  GCP_BEGIN(gcp_start);
   /* USER CODE END USART2_IRQn 0 */
   HAL_UART_IRQHandler(&huart2);
   /* USER CODE BEGIN USART2_IRQn 1 */
-
+  GCP_END(GCP_UART_ISR, gcp_start);
   /* USER CODE END USART2_IRQn 1 */
 }
 
@@ -326,11 +327,11 @@ void TIM6_DAC_IRQHandler(void)
 void FDCAN2_IT0_IRQHandler(void)
 {
   /* USER CODE BEGIN FDCAN2_IT0_IRQn 0 */
-
+  GCP_BEGIN(gcp_start);
   /* USER CODE END FDCAN2_IT0_IRQn 0 */
   HAL_FDCAN_IRQHandler(&hfdcan2);
   /* USER CODE BEGIN FDCAN2_IT0_IRQn 1 */
-
+  GCP_END(GCP_CAN_ISR, gcp_start);
   /* USER CODE END FDCAN2_IT0_IRQn 1 */
 }
 
@@ -340,11 +341,11 @@ void FDCAN2_IT0_IRQHandler(void)
 void FDCAN2_IT1_IRQHandler(void)
 {
   /* USER CODE BEGIN FDCAN2_IT1_IRQn 0 */
-
+  GCP_BEGIN(gcp_start);
   /* USER CODE END FDCAN2_IT1_IRQn 0 */
   HAL_FDCAN_IRQHandler(&hfdcan2);
   /* USER CODE BEGIN FDCAN2_IT1_IRQn 1 */
-
+  GCP_END(GCP_CAN_ISR, gcp_start);
   /* USER CODE END FDCAN2_IT1_IRQn 1 */
 }
 

@@ -465,6 +465,14 @@ def configure_and_build(ui: UI, cfg: BuildConfig, target: str | None = None) -> 
     watchdog_flag = f"-DENABLE_BOARD_WATCHDOG={'ON' if cfg.watchdog else 'OFF'}"
     simulator_flag = f"-DSEDS_FIRMWARE_SIM_TEST={'ON' if os.environ.get('SEDS_FIRMWARE_SIM_TEST') == '1' else 'OFF'}"
     hil_flag = f"-DGATEWAY_HIL_DIAGNOSTICS={'ON' if os.environ.get('GATEWAY_HIL_DIAGNOSTICS') == '1' else 'OFF'}"
+    # Measurement-only builds (docs/throughput.md); always passed explicitly so
+    # a profiling configure never lingers in the CMake cache.
+    profile_flag = f"-DGATEWAY_CYCLE_PROFILE={'ON' if os.environ.get('GATEWAY_CYCLE_PROFILE') == '1' else 'OFF'}"
+    nested_flag = f"-DGATEWAY_CYCLE_PROFILE_NESTED={'ON' if os.environ.get('GATEWAY_CYCLE_PROFILE_NESTED') == '1' else 'OFF'}"
+    loadgen_fps = os.environ.get("GATEWAY_LOADGEN_FPS", "0")
+    if not loadgen_fps.isdigit():
+        raise SystemExit("GATEWAY_LOADGEN_FPS must be a non-negative integer")
+    loadgen_flag = f"-DGATEWAY_LOADGEN_FPS={int(loadgen_fps)}"
 
     run(ui, [
         "cmake",
@@ -484,6 +492,9 @@ def configure_and_build(ui: UI, cfg: BuildConfig, target: str | None = None) -> 
         telemetry_flag,
         simulator_flag,
         hil_flag,
+        profile_flag,
+        nested_flag,
+        loadgen_flag,
         "-S", str(cfg.repo_root),
         "-B", str(cfg.build_dir),
         "-G", cfg.generator,
@@ -1047,6 +1058,11 @@ def main() -> None:
                     ui, cfg.repo_root, "stm32g4", cfg.build_subdir,
                     sedsnet_ref=cfg.sedsnet_ref,
                 ),
+            )
+            from sim.throughput import TARGET_FPS, qualify_target
+            _run_test_stage(
+                ui, results, f"Throughput scenario ({TARGET_FPS} frames/s)",
+                lambda: qualify_target(ui),
             )
             if args.ultra_soak:
                 _run_test_stage(

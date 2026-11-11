@@ -33,6 +33,7 @@
 #include <string.h>
 #include "flight_state_cache.h"
 #include "board_recovery_boot.h"
+#include "gateway_loadgen.h"
 extern UX_SLAVE_CLASS_CDC_ACM *cdc_acm;
 /* USER CODE END Includes */
 
@@ -770,7 +771,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
     HAL_IncTick();
   }
   /* USER CODE BEGIN Callback 1 */
-
+  if (htim->Instance == TIM6) gateway_loadgen_tick();
   /* USER CODE END Callback 1 */
 }
 

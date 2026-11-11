@@ -139,6 +139,35 @@ target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
     CAN_BUS_REASM_MAX_BYTES=128
 )
 
+# Measurement-only builds; both default off and never ship.
+option(GATEWAY_CYCLE_PROFILE "Per-path DWT cycle accounting (see gateway_cycle_profile.h)" OFF)
+if(GATEWAY_CYCLE_PROFILE)
+    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE GATEWAY_CYCLE_PROFILE=1)
+    target_sources(${CMAKE_PROJECT_NAME} PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/gateway_cycle_profile.c)
+endif()
+option(GATEWAY_CYCLE_PROFILE_NESTED
+    "Also time nested SEDSnet/allocator calls with -finstrument-functions (adds overhead)" OFF)
+if(GATEWAY_CYCLE_PROFILE AND GATEWAY_CYCLE_PROFILE_NESTED)
+    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE GATEWAY_CYCLE_PROFILE_NESTED=1)
+    # Nested slots are timed by entry/exit hooks; see gateway_cycle_profile.h.
+    set_source_files_properties(
+        ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/telemetry.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/telemetry_uart.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/telemetry_tlsf.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/can_tx_queue.c
+        PROPERTIES COMPILE_OPTIONS
+        "-finstrument-functions;-finstrument-functions-exclude-file-list=Drivers/,Middlewares/,third_party/,AZURE_RTOS/,_deps/;-finstrument-functions-exclude-function-list=telemetry_uart_rx_ring_pop_byte,telemetry_uart_process_rx_byte,telemetry_uart_rx_push_byte,telemetry_uart_nested_rx_push_byte,telemetry_uart_is_first_magic,telemetry_uart_is_valid_header,telemetry_uart_strict_time_remaining,telemetry_uart_irq_save,telemetry_uart_irq_restore")
+endif()
+set(GATEWAY_LOADGEN_FPS "0" CACHE STRING
+    "Synthetic CAN ingress frames/s for throughput tests; 0 disables (see gateway_loadgen.h)")
+if(ENABLE_TELEMETRY AND NOT GATEWAY_LOADGEN_FPS STREQUAL "0")
+    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
+        GATEWAY_LOADGEN_FPS=${GATEWAY_LOADGEN_FPS}U)
+    target_sources(${CMAKE_PROJECT_NAME} PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/gateway_loadgen.c)
+endif()
+
 option(GATEWAY_CACHED_TRANSIT_ADMISSION "Bounded scratch admission for warmed best-effort transit" ON)
 if(GATEWAY_CACHED_TRANSIT_ADMISSION)
     target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE GATEWAY_CACHED_TRANSIT_ADMISSION=1)
@@ -146,6 +175,13 @@ endif()
 
 set(GATEWAY_SEDSNET_EMERGENCY_POOL_SIZE "16384" CACHE STRING
     "Dedicated SEDSNet large-allocation pool isolated from small-object churn" FORCE)
+# The sim image has <100 B of SRAM left. Measurement-only builds take their
+# profile table and generator state from this TLSF-backed pool (0.6% of the
+# heap) rather than trimming any production feature; normal builds are unchanged.
+if(GATEWAY_CYCLE_PROFILE OR NOT GATEWAY_LOADGEN_FPS STREQUAL "0")
+    set(GATEWAY_SEDSNET_EMERGENCY_POOL_SIZE "15872" CACHE STRING
+        "Dedicated SEDSNet large-allocation pool isolated from small-object churn" FORCE)
+endif()
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
     GATEWAY_SEDSNET_EMERGENCY_POOL_SIZE=${GATEWAY_SEDSNET_EMERGENCY_POOL_SIZE})
 

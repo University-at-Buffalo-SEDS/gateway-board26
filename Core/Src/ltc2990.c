@@ -246,7 +246,9 @@ void telemetry_ltc2990_update_voltage(LTC2990_Handle_t *ltc2990_handle) {
     if (!isfinite(voltage)) return;
 
 
-#ifdef TELEMETRY_ENABLED
+#if defined(TELEMETRY_ENABLED) && !defined(GATEWAY_LOADGEN_FPS)
+    /* Load-generator images run without a GroundStation, so nothing would
+     * acknowledge these reliable packets; see docs/throughput.md. */
     SedsResult res = log_telemetry_asynchronous(SEDS_DT_BATTERY_VOLTAGE, &voltage, 1, sizeof(float));
     if (res != SEDS_OK) {
         g_power_telemetry_drops++;
@@ -266,7 +268,9 @@ void telemetry_ltc2990_update_current(LTC2990_Handle_t *ltc2990_handle) {
     }
 
 
-#ifdef TELEMETRY_ENABLED
+#if defined(TELEMETRY_ENABLED) && !defined(GATEWAY_LOADGEN_FPS)
+    /* Load-generator images run without a GroundStation, so nothing would
+     * acknowledge these reliable packets; see docs/throughput.md. */
     SedsResult res = log_telemetry_asynchronous(SEDS_DT_BATTERY_CURRENT, &current_value, 1, sizeof(float));
     if (res != SEDS_OK) {
         g_power_telemetry_drops++;

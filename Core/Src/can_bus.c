@@ -893,7 +893,7 @@ void can_bus_process_rx(void) {
 
 uint32_t can_bus_rx_dropped_frames(void) { return g_rx_dropped_frames; }
 
-#ifdef CAN_BUS_TEST
+#if defined(CAN_BUS_TEST) || defined(GATEWAY_LOADGEN_FPS)
 void can_bus_test_inject(uint32_t std_id, const uint8_t *data, size_t len)
 {
   rb_push(std_id, data, (uint8_t)((len > 64U) ? 64U : len));

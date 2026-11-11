@@ -5,6 +5,8 @@
 #include "board_link_uart.h"
 #endif
 #include "can_bus.h"
+#include "gateway_cycle_profile.h"
+#include "gateway_loadgen.h"
 #include "main.h"
 #include "telemetry.h"
 #include "ota_stream.h"
@@ -68,14 +70,17 @@ static void service_record(unsigned phase, uint32_t start)
 }
 #ifdef SEDS_FIRMWARE_SIM_TEST
 volatile uint32_t g_sim_gateway_service_active = 7U; /* startup */
-#define SERVICE(phase, call) do { g_sim_gateway_service_active = (phase); uint32_t started = HAL_GetTick(); call; service_record(phase, started); g_sim_gateway_service_active = 7U; } while (0)
+#define SERVICE(phase, call) do { g_sim_gateway_service_active = (phase); GCP_BEGIN(cycles); uint32_t started = HAL_GetTick(); call; service_record(phase, started); GCP_END(phase, cycles); g_sim_gateway_service_active = 7U; } while (0)
 #else
-#define SERVICE(phase, call) do { uint32_t started = HAL_GetTick(); call; service_record(phase, started); } while (0)
+#define SERVICE(phase, call) do { GCP_BEGIN(cycles); uint32_t started = HAL_GetTick(); call; service_record(phase, started); GCP_END(phase, cycles); } while (0)
 #endif
 
 
 static void sample_telemetry_stack(void)
 {
+    /* Once per worker loop; both are empty unless a measurement build. */
+    gateway_cycle_profile_loop();
+    gateway_loadgen_poll();
     const volatile uint32_t *const start =
         (const volatile uint32_t *)telemetry_thread.tx_thread_stack_start;
     const volatile uint32_t *const end =

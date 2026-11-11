@@ -39,7 +39,7 @@ uint32_t can_bus_rx_pending(void);
 /* Number of frames rejected because the ISR-to-thread ring was full. */
 uint32_t can_bus_rx_dropped_frames(void);
 
-#ifdef CAN_BUS_TEST
+#if defined(CAN_BUS_TEST) || defined(GATEWAY_LOADGEN_FPS)
 /* Host-test ingress hook; never present in production firmware. */
 void can_bus_test_inject(uint32_t std_id, const uint8_t *data, size_t len);
 #endif
