@@ -40,6 +40,18 @@ separate 600,000 ms firmware-time fault/rejoin, command/ACK, and memory-leak
 qualification. Commands must execute and return an ACK throughout the soak,
 including its final interval.
 
+A factory flash (the default `--image factory`) also erases the board's
+LaunchCore persistent store (0x0807F000-0x0807FFFF, pages 254-255), so records
+from an older flash layout cannot survive into the new image and block the
+store. It wipes the cached flight state, boot identity, recovery floor and
+commissioning record, and prints that range and list before flashing. With
+`stm32prog-cli` and `st-flash` (1.8.0 or newer) only the store pages are
+erased. `dfu` cannot erase a page range, so it mass-erases the whole chip
+(including the OTA delta region) before writing the factory image. `st-util`
+and `stlink-gdbserver` cannot erase and refuse unless you pass
+`--keep-persist`. Pass `--keep-persist` to keep the store, or
+`--erase-persist` to erase it with an app-only flash.
+
 The normal flash workflow writes the complete `.factory.bin` at `0x08000000`.
 Run `./build.py flash --help` for other host programmers. OTA packages use the
 `.seds` extension and select delta or full-image recovery from the BSP layout.
