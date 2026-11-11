@@ -473,6 +473,7 @@ def configure_and_build(ui: UI, cfg: BuildConfig, target: str | None = None) -> 
     if not loadgen_fps.isdigit():
         raise SystemExit("GATEWAY_LOADGEN_FPS must be a non-negative integer")
     loadgen_flag = f"-DGATEWAY_LOADGEN_FPS={int(loadgen_fps)}"
+    own_telemetry_flag = f"-DGATEWAY_LOADGEN_OWN_TELEMETRY={'ON' if os.environ.get('GATEWAY_LOADGEN_OWN_TELEMETRY') == '1' else 'OFF'}"
 
     run(ui, [
         "cmake",
@@ -495,6 +496,7 @@ def configure_and_build(ui: UI, cfg: BuildConfig, target: str | None = None) -> 
         profile_flag,
         nested_flag,
         loadgen_flag,
+        own_telemetry_flag,
         "-S", str(cfg.repo_root),
         "-B", str(cfg.build_dir),
         "-G", cfg.generator,
@@ -1059,9 +1061,11 @@ def main() -> None:
                     sedsnet_ref=cfg.sedsnet_ref,
                 ),
             )
-            from sim.throughput import TARGET_FPS, qualify_target
+            from sim.throughput import CAPACITY_FPS, TARGET_FPS, qualify_target
             _run_test_stage(
-                ui, results, f"Throughput scenario ({TARGET_FPS} frames/s)",
+                ui, results,
+                f"Throughput gates ({TARGET_FPS}/s sustained, overload, GS unreachable; "
+                f"capacity floor {CAPACITY_FPS}/s)",
                 lambda: qualify_target(ui),
             )
             if args.ultra_soak:

@@ -246,9 +246,11 @@ void telemetry_ltc2990_update_voltage(LTC2990_Handle_t *ltc2990_handle) {
     if (!isfinite(voltage)) return;
 
 
-#if defined(TELEMETRY_ENABLED) && !defined(GATEWAY_LOADGEN_FPS)
+#if defined(TELEMETRY_ENABLED) && \
+    (!defined(GATEWAY_LOADGEN_FPS) || defined(GATEWAY_LOADGEN_OWN_TELEMETRY))
     /* Load-generator images run without a GroundStation, so nothing would
-     * acknowledge these reliable packets; see docs/throughput.md. */
+     * acknowledge these reliable packets; only the GS-unreachable scenario
+     * keeps them. See docs/throughput.md. */
     SedsResult res = log_telemetry_asynchronous(SEDS_DT_BATTERY_VOLTAGE, &voltage, 1, sizeof(float));
     if (res != SEDS_OK) {
         g_power_telemetry_drops++;
@@ -268,9 +270,11 @@ void telemetry_ltc2990_update_current(LTC2990_Handle_t *ltc2990_handle) {
     }
 
 
-#if defined(TELEMETRY_ENABLED) && !defined(GATEWAY_LOADGEN_FPS)
+#if defined(TELEMETRY_ENABLED) && \
+    (!defined(GATEWAY_LOADGEN_FPS) || defined(GATEWAY_LOADGEN_OWN_TELEMETRY))
     /* Load-generator images run without a GroundStation, so nothing would
-     * acknowledge these reliable packets; see docs/throughput.md. */
+     * acknowledge these reliable packets; only the GS-unreachable scenario
+     * keeps them. See docs/throughput.md. */
     SedsResult res = log_telemetry_asynchronous(SEDS_DT_BATTERY_CURRENT, &current_value, 1, sizeof(float));
     if (res != SEDS_OK) {
         g_power_telemetry_drops++;

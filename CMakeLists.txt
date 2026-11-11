@@ -167,6 +167,11 @@ if(ENABLE_TELEMETRY AND NOT GATEWAY_LOADGEN_FPS STREQUAL "0")
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/gateway_loadgen.c)
 endif()
+option(GATEWAY_LOADGEN_OWN_TELEMETRY
+    "Load-generator images keep the gateway's own reliable telemetry (GS-unreachable scenario)" OFF)
+if(GATEWAY_LOADGEN_OWN_TELEMETRY)
+    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE GATEWAY_LOADGEN_OWN_TELEMETRY=1)
+endif()
 
 option(GATEWAY_CACHED_TRANSIT_ADMISSION "Bounded scratch admission for warmed best-effort transit" ON)
 if(GATEWAY_CACHED_TRANSIT_ADMISSION)

@@ -83,7 +83,12 @@ void gateway_loadgen_tick(void) {
     const uint32_t sequence = ++g_gateway_loadgen_injected;
     put_le32(&g_frame[g_payload_offset], sequence);
     put_le32(&g_frame[g_frame_len - 4U], loadgen_crc(g_frame, g_frame_len - 4U));
+    /* The CAN ring has a single producer; keep the FDCAN ISR out while
+     * this lower-priority tick pushes. */
+    const uint32_t primask = __get_PRIMASK();
+    __disable_irq();
     can_bus_test_inject(LOADGEN_STD_ID, g_frame, g_frame_len);
+    __set_PRIMASK(primask);
   }
   GCP_END(GCP_LOADGEN, gcp_start);
 }

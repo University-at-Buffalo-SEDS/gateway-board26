@@ -35,6 +35,22 @@ TARGET_FPS = 600
 # Measurement images never share a directory with flashable release builds.
 BUILD_SUBDIR = "Throughput_Script"
 MIN_DELIVERED = 0.99
+# Overload: offered rates far above capacity must still forward at least 90%
+# of the sustained capacity (CAPACITY_FPS is delivered losslessly, Renode-
+# relative), and the excess must be shed in the ISR ring rather than inside
+# the router. Before pacing, capacity was 1,100/s and 1,500-3,000 frames/s
+# collapsed to 350-440/s.
+CAPACITY_FPS = 1200
+OVERLOAD_FPS = (1500, 3000)
+OVERLOAD_MIN_FRACTION = 0.9
+# Share of the lost frames that must be ring drops (cheap, ISR) rather than
+# losses after the router accepted them.
+RING_SHED_FRACTION = 0.99
+# GroundStation unreachable and no traffic: the router re-pops its own
+# unroutable reliable packets with no backoff. Relative CPU busy before the
+# gateway-side backoff was about 64%.
+IDLE_FPS = 1
+IDLE_MAX_BUSY = 0.25
 
 SLOTS = ["uart_service", "can_drain", "queues", "discovery", "timesync", "ota",
          "wait", "can_isr", "uart_isr", "can_ingress", "uart_ingress", "uart_tx",
@@ -80,9 +96,12 @@ def probes() -> list[dict]:
     return result
 
 
-def build(fps: int) -> None:
+def build(fps: int, gs_unreachable: bool = False) -> None:
+    """gs_unreachable keeps the gateway's own reliable battery telemetry. With
+    no GroundStation nothing acknowledges it, as when the Pico link is down."""
     env = dict(os.environ, SEDS_FIRMWARE_SIM_TEST="1", GATEWAY_CYCLE_PROFILE="1",
-               GATEWAY_LOADGEN_FPS=str(fps))
+               GATEWAY_LOADGEN_FPS=str(fps),
+               GATEWAY_LOADGEN_OWN_TELEMETRY="1" if gs_unreachable else "0")
     env.setdefault("CMAKE_BUILD_PARALLEL_LEVEL", "4")
     env.setdefault("CARGO_BUILD_JOBS", "4")
     for image in ("factory", "ota"):  # the simulator validates both artifacts
@@ -187,26 +206,58 @@ def analyse(series: dict[str, list[int]], fps: int, sample_ms: float) -> dict:
                                  if result["injected_fps"] else 0.0)
     result["pass"] = (result["delivered_ratio"] >= MIN_DELIVERED
                       and result["can_ring_drops"] == 0 and result["alloc_fail"] == 0)
+    lost_fps = max(0.0, result["injected_fps"] - result["forwarded_fps"])
+    ring_fps = result["can_ring_drops"] / seconds
+    result["ring_shed_fraction"] = ring_fps / lost_fps if lost_fps else 1.0
+    result["overload_pass"] = (
+        result["forwarded_fps"] >= OVERLOAD_MIN_FRACTION * CAPACITY_FPS
+        and result["ring_shed_fraction"] >= RING_SHED_FRACTION
+        and result["alloc_fail"] == 0)
+    result["idle_pass"] = result["cpu_busy_share"] <= IDLE_MAX_BUSY
     return result
 
 
-def run(fps: int, virtual_ms: int, samples: int, skip_build: bool) -> dict:
+def run(fps: int, virtual_ms: int, samples: int, skip_build: bool,
+        gs_unreachable: bool = False) -> dict:
     if not skip_build:
-        build(fps)
+        build(fps, gs_unreachable)
     series = simulate(virtual_ms, samples)
-    return analyse(series, fps, virtual_ms / samples)
+    result = analyse(series, fps, virtual_ms / samples)
+    result["gs_unreachable"] = gs_unreachable
+    return result
+
+
+def summary(result: dict) -> str:
+    return (f"offered {result['offered_fps']}/s"
+            f"{' (GS unreachable)' if result.get('gs_unreachable') else ''}: forwarded "
+            f"{result['forwarded_fps']:.0f} of {result['injected_fps']:.0f}/s "
+            f"({100 * result['delivered_ratio']:.1f}%), ring drops "
+            f"{result['can_ring_drops']} ({100 * result['ring_shed_fraction']:.0f}% of loss), "
+            f"handoff fails {result['can_handoff_fail']}, allocation failures "
+            f"{result['alloc_fail']}, CPU busy {100 * result['cpu_busy_share']:.0f}% "
+            f"(Renode-relative)")
+
+
+def gates() -> list[tuple[str, int, bool, str]]:
+    """(name, offered fps, GS unreachable, criterion) for test --all."""
+    return [("sustained", TARGET_FPS, False, "pass"),
+            *[(f"overload {fps}", fps, False, "overload_pass") for fps in OVERLOAD_FPS],
+            ("GS unreachable", TARGET_FPS, True, "pass"),
+            ("GS unreachable, idle", IDLE_FPS, True, "idle_pass")]
 
 
 def qualify_target(ui=None) -> None:
-    """build.py test --all stage: forward TARGET_FPS with no loss."""
-    result = run(TARGET_FPS, 10000, 10, False)
-    summary = (f"forwarded {result['forwarded_fps']:.0f} of {result['injected_fps']:.0f} "
-               f"frames/s, ring drops {result['can_ring_drops']}, allocation failures "
-               f"{result['alloc_fail']}, relative CPU busy {100 * result['cpu_busy_share']:.0f}%")
-    if ui is not None:
-        ui.say("info", "Throughput: " + summary)
-    if not result["pass"]:
-        raise RuntimeError(f"Gateway missed the {TARGET_FPS} frames/s target: {summary}")
+    """build.py test --all stage: every gate in gates() must hold."""
+    failures = []
+    for name, fps, unreachable, criterion in gates():
+        result = run(fps, 10000, 10, False, unreachable)
+        line = f"{name}: {summary(result)}"
+        if ui is not None:
+            ui.say("info", "Throughput " + line)
+        if not result[criterion]:
+            failures.append(line)
+    if failures:
+        raise RuntimeError("Gateway throughput gates failed:\n" + "\n".join(failures))
 
 
 def main() -> int:
@@ -218,22 +269,31 @@ def main() -> int:
     parser.add_argument("--samples", type=int, default=10)
     parser.add_argument("--skip-build", action="store_true")
     parser.add_argument("--json", action="store_true")
+    parser.add_argument("--gs-unreachable", action="store_true",
+                        help="keep the gateway's own reliable telemetry (no GS acknowledges it)")
+    parser.add_argument("--gates", action="store_true",
+                        help="run every test --all gate (sustained, overload, GS unreachable)")
     args = parser.parse_args()
+    if args.gates:
+        try:
+            qualify_target(None)
+        except RuntimeError as error:
+            print(error)
+            return 1
+        print("all throughput gates passed")
+        return 0
     rates = [int(x) for x in args.sweep.split(",")] if args.sweep else [args.fps]
     results = []
     for fps in rates:
-        result = run(fps, args.virtual_ms, args.samples, args.skip_build and len(rates) == 1)
+        result = run(fps, args.virtual_ms, args.samples,
+                     args.skip_build and len(rates) == 1, args.gs_unreachable)
         results.append(result)
-        print(json.dumps(result, indent=2) if args.json else
-              f"offered {fps}/s: injected {result['injected_fps']:.0f}/s, forwarded "
-              f"{result['forwarded_fps']:.0f}/s ({100 * result['delivered_ratio']:.1f}%), "
-              f"ring drops {result['can_ring_drops']}, handoff fails "
-              f"{result['can_handoff_fail']}, UART queue refusals "
-              f"{result['uart_tx_queue_drops']}, CPU busy {100 * result['cpu_busy_share']:.0f}% "
-              f"(relative; Renode is not cycle accurate)", flush=True)
+        print(json.dumps(result, indent=2) if args.json else summary(result), flush=True)
     if args.sweep:
         return 0
-    return 0 if results[0]["pass"] else 1
+    criterion = ("idle_pass" if args.fps <= IDLE_FPS else
+                 "pass" if args.fps <= CAPACITY_FPS else "overload_pass")
+    return 0 if results[0][criterion] else 1
 
 
 if __name__ == "__main__":
