@@ -16,7 +16,7 @@ volatile uint32_t g_telemetry_discovery_seen;
 volatile uint32_t g_reliable_refusal_count;
 static uint64_t clock_ms = 1000;
 static unsigned writes, acks;
-static uint8_t stored = 5;
+static uint8_t stored = 6;
 static bool allowed = true, fail_write;
 uint32_t HAL_GetTick(void) { return (uint32_t)clock_ms; }
 int persistent_store_init(void) { return 0; }
@@ -45,17 +45,17 @@ int main(int argc, char **argv)
   assert(r);
   assert(seds_router_set_sender_id(r, "GB", 2) == SEDS_OK);
   assert(flight_state_cache_init(r) == SEDS_OK);
-  assert(flight_state_cache_value() == 5);
+  assert(flight_state_cache_value() == 6);
   int32_t sid = seds_router_add_side_packet(r, "uart", 4, side, NULL, false);
   assert(sid >= 0);
-  uint8_t value = 3;
+  uint8_t value = 13;
   uint32_t endpoint = SEDS_EP_FLIGHT_STATE;
   SedsPacketView p = {.ty = SEDS_DT_FLIGHT_STATE, .data_size = 1, .sender = "GS", .sender_len = 2,
                       .endpoints = &endpoint, .num_endpoints = 1, .timestamp = 900,
                       .payload = &value, .payload_len = 1};
   bool refused = !strcmp(mode, "refused"), malformed = !strcmp(mode, "malformed");
   allowed = !refused;
-  if (malformed) value = 16;
+  if (malformed) value = 17; /* above InFlight (16) */
   fail_write = !strcmp(mode, "persist_fail");
   SedsResult received = seds_router_receive_from_side(r, (uint32_t)sid, &p);
   SedsResult processed = seds_router_process_all_queues(r);
@@ -64,7 +64,7 @@ int main(int argc, char **argv)
          (unsigned)g_reliable_refusal_count);
   if (refused || malformed) {
     /* Deliberately not applied, never persisted, observation retired... */
-    assert(writes == 0 && stored == 5 && flight_state_cache_value() == 5);
+    assert(writes == 0 && stored == 6 && flight_state_cache_value() == 6);
     assert(seds_router_cached_managed_variable_packed_len(r, SEDS_DT_FLIGHT_STATE) <= 0);
     /* ...but delivered: acknowledged so the station stops retransmitting. */
     assert(received == SEDS_OK && processed == SEDS_OK && acks == 1);
@@ -73,19 +73,19 @@ int main(int argc, char **argv)
     clock_ms += 250;
     assert(seds_router_receive_from_side(r, (uint32_t)sid, &p) == SEDS_OK);
     assert(seds_router_process_all_queues(r) == SEDS_OK);
-    assert(writes == 0 && flight_state_cache_value() == 5);
+    assert(writes == 0 && flight_state_cache_value() == 6);
   } else if (fail_write) {
     /* A storage failure after the apply is acknowledged (a withheld receipt
      * stalled the station's ordered FLIGHT_STATE stream); the poll retries
      * durability once per second. */
-    assert(received == SEDS_OK && acks == 1 && flight_state_cache_value() == 3 &&
-           g_reliable_refusal_count == 0 && stored == 5);
+    assert(received == SEDS_OK && acks == 1 && flight_state_cache_value() == 13 &&
+           g_reliable_refusal_count == 0 && stored == 6);
     fail_write = 0; clock_ms += 1000;
-    assert(flight_state_cache_poll(r) == SEDS_OK && stored == 3);
+    assert(flight_state_cache_poll(r) == SEDS_OK && stored == 13);
   } else {
     assert(!strcmp(mode, "allowed"));
-    assert(received == SEDS_OK && acks == 1 && writes == 1 && stored == 3 &&
-           flight_state_cache_value() == 3 && g_reliable_refusal_count == 0);
+    assert(received == SEDS_OK && acks == 1 && writes == 1 && stored == 13 &&
+           flight_state_cache_value() == 13 && g_reliable_refusal_count == 0);
   }
   seds_router_free(r);
   printf("PASS %s\n", mode);

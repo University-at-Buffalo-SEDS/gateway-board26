@@ -37,7 +37,7 @@ volatile uint32_t g_telemetry_discovery_seen;
 volatile uint32_t g_reliable_refusal_count;
 static uint64_t clock_ms=1000;
 static unsigned writes,app_callbacks,registrations,enables,disables,invalidations,refreshes,outputs;
-static uint8_t stored=5;
+static uint8_t stored=6;
 static bool fail_write=true,policy=true,fail_enable,fail_callback;
 static SedsEndpointHandlerFn original_callback;
 static void *original_user;

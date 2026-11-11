@@ -38,14 +38,14 @@ static void poll_at(unsigned at){tick=at;assert(flight_state_cache_poll(&poll_ro
 static SedsResult apply(uint8_t s){SedsResult r=update(s);assert(!ota_owned);return r;}
 int main(int argc,char **argv){
  assert(argc==2);SedsRouter router=0;
- assert(flight_state_cache_init(&router)==0&&flight_state_cache_value()==5);
+ assert(flight_state_cache_init(&router)==0&&flight_state_cache_value()==6);
  tick=10000;
  if(!strcmp(argv[1],"write_failure")){
   fail_write=1;
   /* Applied and acknowledged; durability is retried, not the receipt. */
-  assert(apply(0)==SEDS_OK&&flight_state_cache_value()==0&&writes==1&&stored==5);
+  assert(apply(0)==SEDS_OK&&flight_state_cache_value()==0&&writes==1&&stored==6);
   poll_at(10999);assert(writes==1);                  /* at most once per second */
-  poll_at(11000);assert(writes==2&&stored==5);
+  poll_at(11000);assert(writes==2&&stored==6);
   fail_write=0;poll_at(11999);assert(writes==2);
   poll_at(12000);assert(writes==3&&stored==0);
   poll_at(30000);assert(writes==3);                  /* nothing pending */
@@ -61,8 +61,8 @@ int main(int argc,char **argv){
   fail_write=1;assert(apply(1)==SEDS_OK&&apply(2)==SEDS_OK);
   fail_write=0;poll_at(11000);assert(stored==2);
  }else if(!strcmp(argv[1],"same_value_while_pending")){
-  fail_write=1;assert(apply(3)==SEDS_OK);
-  fail_write=0;assert(apply(3)==SEDS_OK&&stored==3);  /* a retry of the write persists */
+  fail_write=1;assert(apply(13)==SEDS_OK);
+  fail_write=0;assert(apply(13)==SEDS_OK&&stored==13);  /* a retry of the write persists */
   const unsigned w=writes;poll_at(20000);assert(writes==w);
  }else if(!strcmp(argv[1],"get_poll")){
   /* A seen value stops the GET; only the durability retry runs. */
