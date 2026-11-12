@@ -217,8 +217,15 @@ set(SEDSNET_ENV_QUEUE_GROW_STEP "1.0" CACHE STRING
     "Use fixed-capacity queues to prevent allocator fragmentation" FORCE)
 set(SEDSNET_ENV_PAYLOAD_COMPRESS_THRESHOLD "30" CACHE STRING "" FORCE)
 set(SEDSNET_TARGET "thumbv7em-none-eabihf" CACHE STRING "" FORCE)
-set(SEDSNET_ENV_RUSTFLAGS "-Ctarget-cpu=cortex-m4" CACHE STRING
-    "Rust code generation flags for the Gateway Cortex-M4")
+# The firmware links only SEDSnet's C static archive. Also building the rlib
+# makes Cargo skip the release-embedded LTO, which costs 24-47 KB of flash.
+set(SEDSNET_CRATE_TYPE "staticlib" CACHE STRING "C-only embedded SDK artifact" FORCE)
+# Generic ARMv7E-M + single-precision FPU code generation (the target default).
+# Naming a CPU gives SEDSnet functions target attributes the precompiled core
+# library lacks, so LTO cannot drop the panic messages, locations and core::fmt
+# code behind them (about 16 KB of flash). FORCE migrates cached flags.
+set(SEDSNET_ENV_RUSTFLAGS "" CACHE STRING
+    "Rust code generation flags for the STM32G4 Cortex-M4" FORCE)
 if(ENABLE_TELEMETRY)
     include(cmake/sedsnet_fetch.cmake)
 endif()
