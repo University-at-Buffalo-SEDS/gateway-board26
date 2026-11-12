@@ -24,6 +24,7 @@
 //  ensure the slot is fully written before publishing `head` (release), and
 //  ensure the consumer sees the slot contents after observing `head` (acquire).
 
+#include "board_clock_us.h"
 #include "can_bus.h"
 #include "can_tx_queue.h"
 #include "can_transport_health.h"
@@ -133,6 +134,14 @@ typedef struct {
 static FDCAN_HandleTypeDef *g_hfdcan = NULL;
 static can_bus_sub_t g_subs[CAN_BUS_MAX_SUBSCRIBERS];
 
+/* Receive time of the frame being delivered (0 outside delivery). */
+static uint64_t g_can_rx_us;
+uint64_t can_bus_current_rx_us(void) { return g_can_rx_us; }
+
+uint32_t can_bus_latest_tx_buffer(void) {
+  return g_hfdcan ? HAL_FDCAN_GetLatestTxFifoQRequestBuffer(g_hfdcan) : 0U;
+}
+
 static inline void can_bus_notify_rx(const uint8_t *data, size_t len) {
   for (unsigned i = 0; i < CAN_BUS_MAX_SUBSCRIBERS; i++) {
     can_bus_rx_cb_t cb = g_subs[i].cb;
@@ -181,6 +190,14 @@ typedef struct {
   uint8_t len;     // payload bytes (0..64)
   uint8_t data[64];
 } can_bus_rx_frame_t;
+
+/* The gateway's ring entry has no spare padding (RAM is at 99.9%): its CAN
+ * packets are stamped when the thread delivers them, not in the RX ISR. */
+static uint64_t can_bus_frame_rx_us(const can_bus_rx_frame_t *f) {
+  (void)f;
+  return board_now_us();
+}
+
 
 static volatile uint16_t g_rx_head = 0;
 static volatile uint16_t g_rx_tail = 0;
@@ -704,7 +721,9 @@ static void handle_rx_frame(const can_bus_rx_frame_t *f, uint32_t now_ms) {
       // Complete?
       if (s->got_count == s->frag_cnt) {
         g_can_reasm_completed++;
+        g_can_rx_us = can_bus_frame_rx_us(f);
         can_bus_notify_rx(s->buf, s->total_len);
+        g_can_rx_us = 0U;
         reasm_reset(s);
       }
 
@@ -713,7 +732,9 @@ static void handle_rx_frame(const can_bus_rx_frame_t *f, uint32_t now_ms) {
   }
 
   // Not a fragment frame: deliver raw CAN payload
+  g_can_rx_us = can_bus_frame_rx_us(f);
   can_bus_notify_rx(f->data, f->len);
+  g_can_rx_us = 0U;
 }
 
 // =========================
@@ -859,6 +880,7 @@ void HAL_FDCAN_TxFifoEmptyCallback(FDCAN_HandleTypeDef *hfdcan) {
 
 void HAL_FDCAN_TxBufferCompleteCallback(FDCAN_HandleTypeDef *hfdcan,
                                         uint32_t buffer_indexes) {
+  if (hfdcan == g_hfdcan) can_tx_queue_note_complete(buffer_indexes);
   if (hfdcan == g_hfdcan && buffer_indexes != 0U)
     g_fdcan_tx_complete_events++;
 }
