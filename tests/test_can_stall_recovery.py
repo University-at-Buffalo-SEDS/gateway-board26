@@ -45,6 +45,7 @@ static int HAL_FDCAN_Init(FDCAN_HandleTypeDef *h){h->State=HAL_FDCAN_STATE_READY
 static int HAL_FDCAN_ActivateNotification(FDCAN_HandleTypeDef *h,unsigned mask,unsigned buffers){assert(h->State==HAL_FDCAN_STATE_BUSY&&mask==63&&buffers==7);return HAL_OK;}
 static void can_tx_queue_reset(void){reset++;}
 static void can_tx_queue_pump(void){pumps++;}
+static unsigned completions;static void can_tx_queue_note_complete(uint32_t buffers){(void)buffers;completions++;}
 ''' +source[start:end]+callbacks+r'''
 static HAL_StatusTypeDef can_bus_configure_filters(FDCAN_HandleTypeDef *h){assert(h->State==HAL_FDCAN_STATE_READY);return HAL_OK;}
 
