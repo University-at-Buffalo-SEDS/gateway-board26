@@ -26,6 +26,9 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#ifdef TELEMETRY_ENABLED
+#include "board_crc32.h"
+#endif
 #include "ux_api.h"
 #include "ux_device_class_cdc_acm.h"
 #include <stdint.h>
@@ -131,7 +134,11 @@ int main(void)
   SystemClock_Config();
 
   /* USER CODE BEGIN SysInit */
-
+#ifdef TELEMETRY_ENABLED
+  /* Before any SEDSnet router exists: frame CRCs on the CRC unit once it
+   * passes its self-test, otherwise SEDSnet keeps its software CRC. */
+  (void)board_crc32_install();
+#endif
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
