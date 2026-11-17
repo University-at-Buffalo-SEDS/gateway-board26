@@ -431,7 +431,7 @@ class BuildConfig:
     packet_store: str = "compact"
     pico_baud: int | None = 1000000
     sedsnet_offline: bool = False
-    sedsnet_ref: str = "main"
+    sedsnet_ref: str = "dev"
     watchdog: bool = True
     allocator: str = "tlsf"
 
@@ -1095,7 +1095,7 @@ def build_cfg_from_args(ui: UI, args: argparse.Namespace) -> BuildConfig:
         packet_store=args.packet_store,
         pico_baud=args.pico_baud,
         sedsnet_offline=args.sedsnet_offline,
-        sedsnet_ref=args.sedsnet_ref or "main",
+        sedsnet_ref=args.sedsnet_ref or "dev",
         allocator=args.allocator,
         generator=args.generator,
         toolchain_file=toolchain,

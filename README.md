@@ -7,7 +7,7 @@ firmware. The gateway driver only transports complete SEDSNet packets. SEDSNet
 discovery and learned subscriptions own routing, so application data is not
 manually fanned out.
 
-CMake tracks SEDSNet `main`, using the existing on-disk source when offline,
+CMake tracks SEDSNet `dev`, using the existing on-disk source when offline,
 and fetches SEDS LaunchCore v1.0.0 without submodules. See
 [SEDSnet source selection](docs/sedsnet-source.md).
 LaunchCore derives linker scripts and the boot/OTA layout from
@@ -119,9 +119,9 @@ and ring overruns together.
 
 ## SEDSnet build configuration
 
-Use `python3 build.py build --release --sedsnet-ref dev` to build the current
-SEDSnet `dev` commit. The same option is accepted by `test` and `flash`.
-Normal builds continue to select `main`. Each branch has its own source cache;
+Normal builds select the current SEDSnet `dev` commit; use
+`python3 build.py build --release --sedsnet-ref main` to build `main`. The same
+option is accepted by `test` and `flash`. Each branch has its own source cache;
 when the network is unavailable the last usable on-disk source is retained.
 The selected revision is printed during configure. An explicit CMake source
 override remains local and is never fetched or reset.
@@ -161,8 +161,8 @@ python3 build.py flash --release --allocator tlsf --packet-store compact \
   --pico-baud 1000000 --method stm32prog-cli
 ```
 
-`--packet-store compact` uses `main` by default, as does heap storage.
-Use `--sedsnet-ref dev` only for an explicit development comparison. Both Pico UART ends must
+`--packet-store compact` uses `dev` by default, as does heap storage.
+Use `--sedsnet-ref main` only for an explicit comparison. Both Pico UART ends must
 use the same baud; 1 Mbaud is the paired Pico build, independent of the 115200
 radio link. The board-owned watchdog is enabled by default; use its
 matching factory bootloader. `--packet-store heap` disables the arena.
