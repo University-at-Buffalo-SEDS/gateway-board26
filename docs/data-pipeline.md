@@ -56,6 +56,19 @@ Direction summary:
   `BOARD_STATE_STATUS` (recovery query replies) and SEDSnet control
   (discovery, time sync) originate on the gateway.
 
+
+**CAN link format v2** (`Core/Inc/can_link.h`, identical on every board): frames
+carry no payload header. The 11-bit identifier is band (bits 8..7: `0x000`
+controls/ACKs/heartbeat, `0x080` metadata, `0x100` data) | board token (bits
+6..3) | frame kind (bits 2..0: SINGLE, FIRST, MIDDLE, LAST, plus a PAD bit whose
+frame ends in its pad length). A side frame of up to 64 B is one frame; up to
+128 B (`CAN_LINK_MAX_PACKET`, the SDK CAN side frame cap) is FIRST + LAST of 64
+B each. Band and board order arbitration exactly as the version 1 identifiers
+`band | board` did. Reassembly keeps one 128-byte slot per (board, band) stream
+(`CAN_BUS_REASM_SLOTS`); a lost fragment leaves an orphan or a packet that
+fails its SEDSnet CRC32. Version 1 sent a 9-byte `'S' 'D'` header in every
+frame (55 B per fragment).
+
 ## 2. Schedule
 
 ```mermaid
@@ -115,9 +128,9 @@ ThreadX tick is 1 kHz (`Core/Inc/tx_user.h` `TX_TIMER_TICKS_PER_SECOND`).
 | --- | --- | --- |
 | CAN | FDCAN2, `FDCAN_FRAME_FD_NO_BRS`, PCLK1 170 MHz / prescaler 2 / (1+19+4) tq = 3.54 Mbit/s, auto-retransmission on | `main.c` 202-257, `stm32g4xx_hal_msp.c` 113 |
 | CAN RX ISR ring | 64 entries x 64 B (63 usable) | `can_bus.c` `CAN_BUS_RX_RING_DEPTH` |
-| Reassembly | 4 slots x 2048 B, max 64 fragments, 1000 ms timeout | `CAN_BUS_REASM_*`, `CAN_BUS_REASM_TIMEOUT_MS` |
-| CAN TX queue | 48 packets, 6144 B charged, packets <= 128 B, 1000 ms max age, 3 frames per pump; 55 B payload + 9 B header per fragment | `can_tx_queue.c` 7-13, `can_tx_queue.h` |
-| CAN arbitration bands | `0x004` controls/ACKs/heartbeat (priority >= 200), `0x084` metadata (schema type 10, SDT priority >= 200), `0x104` data | `Core/Inc/board_can_priority.h` |
+| Reassembly | 3 slots x 128 B (one two-frame link v2 packet each), 1000 ms timeout | `CAN_BUS_REASM_*`, `CAN_BUS_REASM_TIMEOUT_MS` |
+| CAN TX queue | 48 packets, 6144 B charged, packets <= 128 B, 1000 ms max age, 3 frames per pump; 64 B per fragment, no header (link v2, `can_link.h`) | `can_tx_queue.c` 7-13, `can_tx_queue.h` |
+| CAN arbitration bands | `0x004` controls/ACKs/heartbeat (priority >= 200), `0x084` metadata (schema type 10, SDT priority >= 200), `0x104` data; on the wire (link v2) band, board 4 in bits 6..3 (`0x020`/`0x0A0`/`0x120`) and the frame kind in bits 2..0 | `Core/Inc/board_can_priority.h` |
 | Pico UART | USART2 at `GATEWAY_PICO_UART_BAUD_RATE` 1,000,000 | `CMakeLists.txt` 77, `main.c` 436 |
 | UART RX | 512 B circular DMA, 4096 B byte ring, 1028 B frame window | `telemetry_uart.c` 31-33, `telemetry_uart.h` |
 | UART RX service | 512 B and 1 ms per call; integrity budget 64 scans / 4096 CRC bytes | `TELEMETRY_UART_RX_SERVICE_*`, `telemetry_uart.c` 693 |

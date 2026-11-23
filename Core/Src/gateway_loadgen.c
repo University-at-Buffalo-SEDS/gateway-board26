@@ -2,13 +2,14 @@
  * Compiled only when GATEWAY_LOADGEN_FPS is defined. */
 #include "gateway_loadgen.h"
 #include "can_bus.h"
+#include "can_link.h"
 #include "gateway_crc32.h"
 #include "gateway_cycle_profile.h"
 #include "main.h"
 #include "sedsnet_config.h"
 #include <string.h>
 
-#define LOADGEN_STD_ID 0x105U /* data band, otherwise unused sender token */
+#define LOADGEN_BASE_ID 0x105U /* data band, otherwise unused sender token */
 #define LOADGEN_SENTINEL 0xA5C3E1F7UL
 
 volatile uint32_t g_gateway_loadgen_fps __attribute__((used)) = GATEWAY_LOADGEN_FPS;
@@ -83,11 +84,17 @@ void gateway_loadgen_tick(void) {
     const uint32_t sequence = ++g_gateway_loadgen_injected;
     put_le32(&g_frame[g_payload_offset], sequence);
     put_le32(&g_frame[g_frame_len - 4U], loadgen_crc(g_frame, g_frame_len - 4U));
+    /* One SINGLE frame in link format v2 (can_link.h). */
+    uint8_t wire[CAN_LINK_FRAME_BYTES];
+    uint32_t wire_id;
+    size_t take;
+    const size_t wire_len = can_link_frame(g_frame, g_frame_len, 0U, LOADGEN_BASE_ID,
+                                           wire, &wire_id, &take);
     /* The CAN ring has a single producer; keep the FDCAN ISR out while
      * this lower-priority tick pushes. */
     const uint32_t primask = __get_PRIMASK();
     __disable_irq();
-    can_bus_test_inject(LOADGEN_STD_ID, g_frame, g_frame_len);
+    can_bus_test_inject(wire_id, wire, (size_t)wire_len);
     __set_PRIMASK(primask);
   }
   GCP_END(GCP_LOADGEN, gcp_start);

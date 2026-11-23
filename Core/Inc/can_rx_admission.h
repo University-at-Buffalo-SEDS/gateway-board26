@@ -3,19 +3,17 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "sedsnet_config.h"
+#include "can_link.h"
 
 /* Admission only: recognize frequent loadcell/pressure samples, never battery
- * values or valve status. Unknown/fragmented packets keep normal access.
+ * values or valve status. Fragmented packets keep normal access (link format
+ * v2: only a SINGLE frame holds a whole packet; see can_link.h).
  * No templates, heap allocations, or changes to routing/schema semantics. */
-static inline int can_rx_is_bulk_telemetry(const uint8_t *p, size_t n)
+static inline int can_rx_is_bulk_telemetry(uint32_t id, const uint8_t *p, size_t n)
 {
-  if (!p || n < 3U) return 0;
-  if (p[0] == 'S' && p[1] == 'D' && p[2] != 'T') {
-    if (n < 9U || p[4] != 0U || p[5] != 1U) return 0;
-    const size_t total = p[7] | ((size_t)p[8] << 8);
-    if (total > n - 9U) return 0;
-    p += 9U; n = total;
-  }
+  if (!p || !can_link_is_single(id)) return 0;
+  n = can_link_payload_len(id, p, n);
+  if (n < 3U) return 0;
   if (n >= 3U && p[0] == 'S' && p[1] == 'D' && p[2] == 'T') {
     if (n < 5U || p[3] != 1U) return 0;
     size_t i = 4U;
