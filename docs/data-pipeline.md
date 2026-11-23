@@ -158,7 +158,7 @@ forwarded), not gateway constants.
 
 | Stream (examples) | Direction | Schema (reliable, priority) | Gateway handling | Drop policy at the gateway |
 | --- | --- | --- | --- | --- |
-| `KG1000`, `KG50`, `OX_TANK_PRESSURE` (was `FUEL_TANK_PRESSURE`) | CAN -> GS | Off, 16 / 16 / 0 | Classified as bulk by `can_rx_is_bulk_telemetry` (`Core/Inc/can_rx_admission.h`) | Shed first: data-band frames are refused when the ring holds >= 55 frames (`can_bus.c` 434). Also displaceable on a full ring. |
+| `KG1000`, `KG50`, `OX_TANK_PRESSURE` (was `FUEL_TANK_PRESSURE`) | CAN -> GS | Off, 16 / 16 / 0 | Classified as bulk by `can_rx_is_bulk_telemetry` (`Core/Inc/can_rx_admission.h`, full ULEB128 type ID; §8 item 8) | Shed first: data-band frames are refused when the ring holds >= 55 frames (`can_bus.c` 434). Also displaceable on a full ring. |
 | All data-band frames from sender token 7 (DAQ compact SDT, e.g. `DAQ_SAR_VOLTAGES`, `DAQ_SDADC_VOLTAGES`, `DAQ_CURRENT_SENSE`, `DAQ_POWER_MONITOR`, `DAQ_KG50_SELECTED`, `DAQ_ADC_TEMPERATURE`) | CAN -> GS | Off | Treated as bulk because compact frames hide the type (`can_bus.c` 435 comment) | Same as above. |
 | `BATTERY_VOLTAGE/CURRENT` (VB, AB, DAQ), `BOARD_HEALTH`, `UMBILICAL_STATUS` (Ordered, 200), `FLIGHT_STATE` (Ordered, 16), `WARNING`, `GENERIC_ERROR` | CAN -> GS | per schema | Normal access to the ring | Full ring: a data-band frame displaces a frame of a peer holding more slots, else it is dropped (`rb_replace_dominant`). |
 | `VALVE_COMMAND`, `ACTUATOR_COMMAND`, `FLIGHT_COMMAND` (Ordered, 200), `ABORT` | GS -> CAN | priority 200; `ABORT`, `FLIGHT_COMMAND` scheduling class -1 (`telemetry.c` 419-420) | CAN ID `0x004`; inserted ahead of non-urgent packets in the CAN TX queue (`can_tx_queue.c` 182-187) | CAN TX: full queue refuses with `HAL_BUSY`; urgent IDs may use all 48 slots / 6144 B, metadata leaves 4 slots / 512 B, data leaves 12 / 1536 B (`queue_full`). Expired after 1 s. End-to-end recovery is SEDSnet reliable retransmit. |
@@ -302,3 +302,15 @@ counters.
 7. **No production heartbeat.** GS liveness for `GB` relies on its other
    traffic (battery samples ~1 s, health 5 s); GS marks a board unhealthy
    after 12 s without evidence (`GroundStation26/docs/network-traffic.md`).
+8. **Fixed (board-bugfix-20261123): the bulk classifier never matched a real
+   type.** `can_rx_is_bulk_telemetry` (`Core/Inc/can_rx_admission.h`)
+   compared the single byte `p[2]` with the 32-bit hashed type IDs, so
+   `KG1000`, `KG50` and the tank pressure were never classified as bulk (only
+   the sender-token-7 rule in item 5 shed anything). The frame carries the type
+   as a u32 ULEB128 after the flags and endpoint-count bytes; the whole ID is
+   now decoded (at most five bytes, rejected if truncated or over 32 bits) and
+   compared with `KG1000`, `KG50` and `OX_TANK_PRESSURE`.
+   `tests/test_can_admission.py` builds frames for every type in
+   `sedsnet_config.h`: only those three are bulk, plain or SDT-wrapped, and
+   control, abort, command, flight-state and battery types never are, nor is
+   any frame with reliable flags.

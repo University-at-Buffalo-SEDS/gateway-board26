@@ -155,3 +155,60 @@ int main(void) {
             exe=str(path/'admission')
             subprocess.run(['cc','-std=c11','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-I',tmp,'-x','c','-','-o',exe],input=code,text=True,check=True)
             subprocess.run([exe],check=True)
+
+
+class RealTypeIdAdmissionTests(unittest.TestCase):
+    """The bulk check against the board's real hashed type IDs (u32 ULEB128)."""
+
+    def test_full_type_ids_classify_bulk_and_never_control(self):
+        import re
+        header = (ROOT / 'Core/Inc/sedsnet_config.h').read_text()
+        types = re.findall(r'#define (SEDS_DT_\w+) \(\(SedsDataType\)(\d+)U\)', header)
+        self.assertGreater(len(types), 20)
+        bulk = {'SEDS_DT_KG1000', 'SEDS_DT_KG50', 'SEDS_DT_OX_TANK_PRESSURE'}
+        self.assertTrue(bulk <= {name for name, _ in types})
+        cases = ''.join(f' check({name},{int(name in bulk)});\n' for name, _ in types)
+        code = r'''
+#include <assert.h>
+#include <stdint.h>
+#include <string.h>
+#include "can_rx_admission.h"
+static size_t frame(uint8_t *f, uint32_t type){
+ size_t n=0;f[n++]=0;f[n++]=1;
+ do{uint8_t b=type&0x7fU;type>>=7;f[n++]=(uint8_t)(b|(type?0x80U:0U));}while(type);
+ while(n<16)f[n++]=0x11;return n;
+}
+static void check(uint32_t type,int expected){
+ uint8_t f[16];size_t n=frame(f,type);
+ assert(can_rx_is_bulk_telemetry(f,n)==expected);
+ /* Reliable/unknown flags always protect the frame. */
+ f[0]=0x02;assert(!can_rx_is_bulk_telemetry(f,n));f[0]=0;
+ /* The same frame inside an SDT envelope. */
+ uint8_t w[32]={83,68,84,1,1};memcpy(w+5,f,n);
+ assert(can_rx_is_bulk_telemetry(w,5+n)==expected);
+}
+int main(void){
+''' + cases + r'''
+ /* The legacy FUEL_TANK_PRESSURE ID and IDs sharing only the first byte of
+  * a bulk ID are not bulk. */
+ check(79920485U,0);check((uint32_t)SEDS_DT_KG1000^0x100U,0);
+ /* A type ULEB cut short by the frame end is never bulk. */
+ uint8_t f[16];frame(f,(uint32_t)SEDS_DT_KG1000);
+ for(size_t n=0;n<7;n++)assert(!can_rx_is_bulk_telemetry(f,n));
+ uint8_t over[16]={0,1,0xff,0xff,0xff,0xff,0x7f,0,0,0};
+ assert(!can_rx_is_bulk_telemetry(over,16));
+ return 0;
+}
+'''
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp)
+            (path / 'sedsnet.h').write_text('#pragma once\n#include <stdint.h>\ntypedef uint32_t SedsDataType;\ntypedef uint32_t SedsDataEndpoint;\n')
+            exe = str(path / 'real-ids')
+            subprocess.run(['cc', '-std=c11', '-Wall', '-Wextra', '-Werror', '-fsanitize=address,undefined',
+                            '-I', tmp, '-I', str(ROOT / 'Core/Inc'), '-x', 'c', '-', '-o', exe],
+                           input=code, text=True, check=True)
+            subprocess.run([exe], check=True)
+
+
+if __name__ == '__main__':
+    unittest.main()
