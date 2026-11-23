@@ -51,7 +51,7 @@ int main(void) {
  rb_push(0x7ff, full, sizeof(full)); assert(wakes==1); consumer_expected=1;
  assert(rb_pop(&exact)); consumer_expected=0;
  assert(exact.std_id==0x7ff && exact.len==64 && memcmp(exact.data,full,64)==0);
- uint8_t bulk[16]={0,1,118}, status[16]={0,1,117}, fragment[64];
+ uint8_t bulk[16]={0,118}, status[16]={0,117}, fragment[64];
  memset(fragment,0x33,sizeof fragment); memcpy(fragment,bulk,16);
  assert(bulkpkt(bulk,16) && can_rx_is_bulk_telemetry(S(0x107),bulk,16));
  assert(bulkpkt(bulk,13));                       /* padded SINGLE frame */
@@ -60,14 +60,15 @@ int main(void) {
  assert(!can_rx_is_bulk_telemetry(F(0x107),fragment,64));
  {uint8_t f[64];uint32_t id;size_t t;size_t w=can_link_frame(bulk,13,0,0x107,f,&id,&t);
   f[w-1]=0;assert(!can_rx_is_bulk_telemetry(id,f,w));}
- uint8_t wrapped[32]={83,68,84,1,1}; memcpy(wrapped+5,bulk,16);
- assert(bulkpkt(wrapped,21));
- wrapped[3]=2; assert(!bulkpkt(wrapped,21));
- memset(wrapped+4,255,28); wrapped[3]=1; assert(!bulkpkt(wrapped,32));
+ /* SEDSnet 7 FULL frame: kind, template id 1 (generation 0), base delta. */
+ uint8_t wrapped[32]={0x60,8,0}; memcpy(wrapped+3,bulk,16);
+ assert(bulkpkt(wrapped,19));
+ wrapped[0]=0x70; assert(!bulkpkt(wrapped,19)); /* compact: no visible type */
+ memset(wrapped+1,255,31); wrapped[0]=0x60; assert(!bulkpkt(wrapped,32));
  assert(!bulkpkt(status,16));
  assert(!can_rx_is_bulk_telemetry(S(0x107),NULL,16));
- for(unsigned n=0;n<7;n++) assert(!bulkpkt(bulk,n));
- bulk[0]=64; assert(!bulkpkt(bulk,16)); bulk[0]=0;
+ for(unsigned n=0;n<6;n++) assert(!bulkpkt(bulk,n));
+ bulk[0]=2; assert(!bulkpkt(bulk,16)); bulk[0]=0; /* reliable */
  // Repeated saturation and wraparound: 39 bulk slots, eight protected slots.
  for(unsigned pass=0;pass<1000;pass++) {
    for(unsigned i=0;i<39;i++) rb_push(UD(i),bulk,16);
@@ -81,7 +82,7 @@ int main(void) {
  assert(g_can_rx_bulk_dropped==1000 && g_rx_dropped_frames==2000);
  // Previously unknown compact/fragmented DAQ traffic filled all 47 slots.
  // Full-ring shedding displaces the largest sender for a quiet board.
- uint8_t compact[16]={83,68,84,2,1};
+ uint8_t compact[16]={0x70,8,1};
  memcpy(fragment,status,16);
  unsigned before_ab=g_can_rx_sender_frames[5], before_ab_drops=g_can_rx_sender_dropped[5];
  for(unsigned pass=0;pass<1000;pass++) {
@@ -136,15 +137,15 @@ int main(void) {
  for(unsigned i=0;i<16;i++) rb_push(S(0x107),compact,16);
  can_bus_rx_frame_t out;
  for(unsigned i=0;i<16;i++) assert(rb_pop(&out));
- rb_push(S(0x107),compact,16); assert(rb_pop(&out)); uint8_t pressure[16]={0,1,111}, battery[16]={0,1,104};
+ rb_push(S(0x107),compact,16); assert(rb_pop(&out)); uint8_t pressure[16]={0,111}, battery[16]={0,104};
  assert(bulkpkt(pressure,16));
  assert(!bulkpkt(battery,16));
  // Pressure bursts must also leave slots for infrequent battery reports.
  for(unsigned i=0;i<47;i++) rb_push(S(0x106),pressure,16);
  for(unsigned i=0;i<8;i++) rb_push(S(0x106),battery,16);
  can_bus_rx_frame_t power;
- for(unsigned i=0;i<39;i++) {assert(rb_pop(&power));assert(power.data[2]==111);}
- for(unsigned i=0;i<8;i++) {assert(rb_pop(&power));assert(power.data[2]==104);}
+ for(unsigned i=0;i<39;i++) {assert(rb_pop(&power));assert(power.data[1]==111);}
+ for(unsigned i=0;i<8;i++) {assert(rb_pop(&power));assert(power.data[1]==104);}
  assert(!rb_pop(&power));
  // Protected metadata uses its own arbitration band while retaining the
  // same peer accounting and full-ring displacement of ordinary telemetry.
@@ -196,7 +197,7 @@ static int bulkpkt(const uint8_t *p, size_t n) {
   return can_rx_is_bulk_telemetry(id, f, w);
 }
 static size_t frame(uint8_t *f, uint32_t type){
- size_t n=0;f[n++]=0;f[n++]=1;
+ size_t n=0;f[n++]=0;
  do{uint8_t b=type&0x7fU;type>>=7;f[n++]=(uint8_t)(b|(type?0x80U:0U));}while(type);
  while(n<16)f[n++]=0x11;return n;
 }
@@ -205,9 +206,9 @@ static void check(uint32_t type,int expected){
  assert(bulkpkt(f,n)==expected);
  /* Reliable/unknown flags always protect the frame. */
  f[0]=0x02;assert(!bulkpkt(f,n));f[0]=0;
- /* The same frame inside an SDT envelope. */
- uint8_t w[32]={83,68,84,1,1};memcpy(w+5,f,n);
- assert(bulkpkt(w,5+n)==expected);
+ /* The same frame inside a SEDSnet 7 FULL template frame. */
+ uint8_t w[32]={0x60,8,0};memcpy(w+3,f,n);
+ assert(bulkpkt(w,3+n)==expected);
 }
 int main(void){
 ''' + cases + r'''
@@ -216,8 +217,8 @@ int main(void){
  check(79920485U,0);check((uint32_t)SEDS_DT_KG1000^0x100U,0);
  /* A type ULEB cut short by the frame end is never bulk. */
  uint8_t f[16];frame(f,(uint32_t)SEDS_DT_KG1000);
- for(size_t n=0;n<7;n++)assert(!bulkpkt(f,n));
- uint8_t over[16]={0,1,0xff,0xff,0xff,0xff,0x7f,0,0,0};
+ for(size_t n=0;n<6;n++)assert(!bulkpkt(f,n));
+ uint8_t over[16]={0,0xff,0xff,0xff,0xff,0x7f,0,0,0};
  assert(!bulkpkt(over,16));
  return 0;
 }

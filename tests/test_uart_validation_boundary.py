@@ -19,7 +19,7 @@ class UartValidationBoundary(unittest.TestCase):
 static struct { unsigned nested_fill, nested_discard_remaining; } g_telemetry_uart;
 static unsigned validations, deliveries, dispatches, nested_bytes;
 int seds_pkt_validate_packed(const uint8_t *p, size_t n) {
-    validations++; return n && (p[0]==0x2c || p[0]=='S') ? 0 : -1;
+    validations++; return n && (p[0]==0x2c || p[0]==0x60) ? 0 : -1;
 }
 static uint8_t telemetry_uart_is_valid_header(uint8_t a,uint8_t b) { return a==0xa5 && b==0x5a; }
 static void telemetry_uart_dispatch_frame(uint8_t magic,const uint8_t *p,size_t n) {
@@ -38,7 +38,7 @@ int main(void) {
     const uint8_t invalid[]={0,1,109};
     telemetry_uart_dispatch_data_payload(invalid,sizeof invalid);
     assert(dispatches==2 && validations==2 && deliveries==1);
-    const uint8_t wrapped[]={'S','D','T',1,42};
+    const uint8_t wrapped[]={0x60,1,0,42};
     telemetry_uart_dispatch_data_payload(wrapped,sizeof wrapped);
     assert(dispatches==3 && validations==3 && deliveries==2);
     const uint8_t nested[]={0xa5,0x5a,1,0,0};

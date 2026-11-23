@@ -28,14 +28,16 @@ static inline int gateway_probe_uleb(const uint8_t *p, size_t n, size_t *i, uint
 extern volatile uint32_t g_gateway_protocol_ack_path[4];
 static inline void gateway_protocol_ack_observe(unsigned stage, const uint8_t *p, size_t n) {
   if(stage>=4 || !p || n<16U) return;
-  if(p[0]=='S' && p[1]=='D' && p[2]=='T') {
-    if(p[3]!=1U) return; /* A compact reference cannot be classified here. */
-    size_t i=4U; uint64_t ignored;
-    if(!gateway_probe_uleb(p,n,&i,&ignored) || n-i<16U) return;
+  if(p[0]==0x60U) {
+    /* SEDSnet 7 FULL frame: template id/generation, base delta, canonical. */
+    size_t i=1U; uint64_t ignored;
+    if(!gateway_probe_uleb(p,n,&i,&ignored) || !gateway_probe_uleb(p,n,&i,&ignored) || n-i<16U) return;
     p+=i; n-=i;
+  } else if((p[0]&0x60U)==0x60U) {
+    return; /* A compact reference or chunk cannot be classified here. */
   }
   /* Canonical type 1 is the stable SEDSNET_RELIABLE_ACK internal ID. */
-  if(n>=16U && p[2]==1U) ++g_gateway_protocol_ack_path[stage];
+  if(n>=16U && p[1]==1U) ++g_gateway_protocol_ack_path[stage];
 }
 #ifdef GATEWAY_HIL_DIAGNOSTICS
 static inline void gateway_status_observe(unsigned stage, const uint8_t *p,
@@ -50,13 +52,16 @@ static inline void gateway_status_observe(unsigned stage, const uint8_t *p,
   int full=0;
   d->frames++;
   if(!p || n<3) goto unknown;
-  if(p[0]==83 && p[1]==68 && p[2]==84) {
-    if(n<5) goto unknown;
-    unsigned kind=p[3]; i=4;
-    /* Compact transport has a flags byte before its template ID. */
-    if(kind==2 || kind==4 || kind==5) i++;
-    if(!gateway_probe_uleb(p,n,&i,&id) || id>UINT32_MAX) goto unknown;
-    if(kind==2 || kind==4 || kind==5) {
+  if((p[0]&0x60U)==0x60U) {
+    /* SEDSnet 7 side-transport frame: FULL (0x60) or COMPACT (0x70..0x73)
+     * name a template id (above three generation bits); others are unknown. */
+    unsigned kind=p[0];
+    if(kind!=0x60U && (kind&0xFCU)!=0x70U) goto unknown;
+    i=1;
+    if(!gateway_probe_uleb(p,n,&i,&id)) goto unknown;
+    id>>=3;
+    if(id>UINT32_MAX) goto unknown;
+    if(kind!=0x60U) {
       for(unsigned k=0;k<GATEWAY_STATUS_TEMPLATE_CAPACITY;k++) {
         if(templates[k].id==id && templates[k].ty) {
           ty=templates[k].ty; source=templates[k].source;
@@ -65,16 +70,13 @@ static inline void gateway_status_observe(unsigned stage, const uint8_t *p,
       }
       goto unknown;
     }
-    if(kind!=1) goto unknown;
+    if(!gateway_probe_uleb(p,n,&i,&ignored)) goto unknown; /* base delta */
     full=1;
   }
   if(n-i<3) goto unknown;
-  uint8_t flags=p[i]; i+=2;
+  i++; /* flags */
   if(!gateway_probe_uleb(p,n,&i,&ty) ||
-     !gateway_probe_uleb(p,n,&i,&ignored) ||
-     !gateway_probe_uleb(p,n,&i,&ignored)) goto unknown;
-  if((flags&8) && !gateway_probe_uleb(p,n,&i,&ignored)) goto unknown;
-  if(!gateway_probe_uleb(p,n,&i,&source) || source>UINT32_MAX || ty>UINT32_MAX) goto unknown;
+     !gateway_probe_uleb(p,n,&i,&source) || source>UINT32_MAX || ty>UINT32_MAX) goto unknown;
   if(full) {
     unsigned k;
     for(k=0;k<GATEWAY_STATUS_TEMPLATE_CAPACITY;k++) if(templates[k].id==id && templates[k].ty) break;

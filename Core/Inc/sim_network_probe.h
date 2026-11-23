@@ -65,18 +65,20 @@ static inline uint32_t sim_probe_sender_address(const char *sender) {
 
 static inline uint32_t sim_probe_packed_data_type(const uint8_t *data,
                                                   size_t len) {
+  /* SEDSnet 7: canonical frames start flags, type ULEB128. A FULL template
+   * frame (0x60) prefixes template id/generation and base delta ULEB128s.
+   * Other side-transport kinds name no type. */
   size_t offset = 0U;
   uint64_t data_type = 0U;
-  if (data == NULL) return UINT32_MAX;
-  if (len >= 5U && data[0] == 'S' && data[1] == 'D' && data[2] == 'T') {
-    if (data[3] != 1U) return UINT32_MAX;
-    offset = 4U;
-    if (!sim_probe_read_uleb(data, len, &offset, &data_type)) return UINT32_MAX;
+  if (data == NULL || len < 2U) return UINT32_MAX;
+  if ((data[0] & 0x60U) == 0x60U) {
+    if (data[0] != 0x60U) return UINT32_MAX;
+    offset = 1U;
+    if (!sim_probe_read_uleb(data, len, &offset, &data_type) ||
+        !sim_probe_read_uleb(data, len, &offset, &data_type)) return UINT32_MAX;
   }
-  if (len < offset + 3U) return UINT32_MAX;
-  offset += 2U;
-  if (
-      sim_probe_read_uleb(data, len, &offset, &data_type) &&
+  offset += 1U;
+  if (sim_probe_read_uleb(data, len, &offset, &data_type) &&
       data_type <= UINT32_MAX) {
     return (uint32_t)data_type;
   }
@@ -94,7 +96,7 @@ static inline void sim_probe_observe_can_tx(const uint8_t *data, size_t len) {
 #endif
 }
 
-/* Allocation-free observation of SEDSNet v4's packed source-address field. */
+/* Allocation-free observation of SEDSnet 7's packed source-address field. */
 static inline uint32_t sim_probe_packed_source_address(const uint8_t *data,
                                                        size_t len) {
 #ifdef SEDS_FIRMWARE_SIM_TEST
@@ -102,13 +104,9 @@ static inline uint32_t sim_probe_packed_source_address(const uint8_t *data,
   uint64_t ignored = 0U;
   uint64_t source_address = 0U;
   if (data == NULL || len < 3U) return 0U;
-  const uint8_t flags = data[offset++];
-  offset++; /* selected endpoint count */
-  if (!sim_probe_read_uleb(data, len, &offset, &ignored) ||
-      !sim_probe_read_uleb(data, len, &offset, &ignored) ||
-      !sim_probe_read_uleb(data, len, &offset, &ignored)) return 0U;
-  if ((flags & 0x08U) != 0U &&
-      !sim_probe_read_uleb(data, len, &offset, &ignored)) return 0U;
+  /* SEDSnet 7 canonical prelude: flags, type, source address. */
+  if ((data[offset++] & 0x60U) == 0x60U) return 0U;
+  if (!sim_probe_read_uleb(data, len, &offset, &ignored)) return 0U;
   if (!sim_probe_read_uleb(data, len, &offset, &source_address)) return 0U;
   return (uint32_t)source_address;
 #else
