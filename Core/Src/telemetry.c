@@ -651,6 +651,9 @@ static SedsResult tx_send_with_priority(const uint8_t *bytes, size_t len,
           sim_probe_packed_data_type(bytes, len), (uint32_t)SEDS_DT_HEARTBEAT, 0x004U);
   if (priority == 254U) can_tx_queue_watch_next();
   status = can_bus_send_large(bytes, len, can_id);
+  /* A send refused before the queue (recovery) must not leave the watch
+   * armed for the next unrelated packet. */
+  if (priority == 254U) can_tx_queue_watch_disarm();
   if (status == HAL_OK) {
     sim_probe_observe_can_tx(bytes, len);
     return SEDS_OK;

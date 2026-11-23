@@ -32,7 +32,8 @@ static uint32_t observed;
 static int result;
 static void HAL_GPIO_TogglePin(int a,int b){(void)a;(void)b;}
 static uint32_t sim_probe_packed_data_type(const uint8_t *p,size_t n){(void)n;return p[0]==120?120:0;}
-static unsigned watched;static void can_tx_queue_watch_next(void){++watched;}
+static unsigned watched,disarmed;static void can_tx_queue_watch_next(void){assert(watched==disarmed);++watched;}
+static void can_tx_queue_watch_disarm(void){++disarmed;assert(watched==disarmed);}
 static int can_bus_send_large(const uint8_t *p,size_t n,uint32_t id){(void)p;(void)n;observed=id;return result;}
 static void sim_probe_observe_can_tx(const uint8_t *p,size_t n){(void)p;(void)n;}
 """ + callback + r"""
@@ -49,6 +50,8 @@ int main(void) {
  }
  assert(tx_send_with_priority(NULL,8,255,NULL)==SEDS_BAD_ARG);
  assert(tx_send_with_priority(opaque[0],0,255,NULL)==SEDS_BAD_ARG);
+ /* Every watched time sync send disarms afterwards, refused or not. */
+ assert(watched>0 && watched==disarmed);
 }
 """
         code=(ROOT/"Core/Inc/board_can_priority.h").read_text()+code

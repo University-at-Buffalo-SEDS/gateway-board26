@@ -69,9 +69,11 @@ Open the checked-in `.ioc` file and generate with the CMake toolchain. Keep user
 code enabled. The `.ioc` is the source of truth for the ThreadX and USBX pool
 sizes; unit tests compare those values with the generated Azure RTOS headers so
 regeneration cannot silently shrink, grow, or repartition the pools.
-The application pool is 74 KiB (75,776 bytes), including additional headroom
-for full-network discovery bursts; the separate large-allocation emergency
-pool remains 16 KiB. Qualification retains the 1 KiB minimum normal-pool
+The application ThreadX pool is 65,408 bytes (`TX_APP_MEM_POOL_SIZE`). It
+was reduced from 75,776 bytes in the October 2026 allocator admission change
+(which also quadrupled the CAN RX ring) to keep static RAM inside the
+STM32G491 limit; the `.ioc` now matches the header. The separate large-allocation
+emergency pool remains 16 KiB. Qualification retains the 1 KiB minimum normal-pool
 reserve rather than accepting near-exhaustion as a passing result.
 
 The top-level CMake project is board-owned and reconnects generated STM32

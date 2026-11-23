@@ -137,7 +137,7 @@ ThreadX tick is 1 kHz (`Core/Inc/tx_user.h` `TX_TIMER_TICKS_PER_SECOND`).
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Battery voltage | LTC2990 `0x4D` V1 single-ended, 14-bit, `5/16384` V/LSB; one triggered conversion per pass, 10 ms settle | One sample per data_acq pass: 1 s sleep + conversion and I2C time (>= ~1.03 s) | `V1 x (91k+10k)/10k - 0.07 V` (`ltc2990.h` `VBATT_*`); volts; no filtering | `BATTERY_VOLTAGE` Float32 x1, Reliable Unordered, priority 0 | CAN band `0x104`, UART | <= one 1 s period stale + queue time | Not finite: skipped. Router refusal: `g_power_telemetry_drops++` (`ltc2990.c` 254-257). |
 | Battery current | LTC2990 `0x4C` dual differential V1-V2, 15-bit signed | Same pass as voltage | `19.42 uV / (0.02 ohm x 10k/81.5k)` A per count (`LTC2990_Code15_To_CurrentA`); positive = battery draw (`CURRENT_DRAW_POLARITY`); amperes; no filtering | `BATTERY_CURRENT` Float32 x1, Reliable Unordered, priority 0 | As above | As above | As above (`ltc2990.c` 278-281). V3-V4 is read but not published. |
-| Board health | Counters from CAN, UART, TLSF, watchdog, die temperature | 5000 ms (`board_health.c` 29), checked every 50 ms maintenance | 24 x UInt32: v1, flags, uptime (1 kHz), reset flags, watchdog missing mask, TLSF live/peak/region/failures, admission refusals, CAN RX drops (w12), CAN TX rejected (w13), UART RX ring drops (w14), CAN TX high-water (w15), send failures (w23) | `BOARD_HEALTH`, Reliable Off, priority 0 | CAN, UART | <= 5 s | Send failure counted in w23 of the next report. |
+| Board health | Counters from CAN, UART, TLSF, watchdog, die temperature | 5000 ms (`board_health.c` 29), checked every 50 ms maintenance | 24 x UInt32: v1, flags, uptime (1 kHz), reset flags, watchdog missing mask, TLSF live/peak/region/failures, admission refusals, CAN RX drops (w12), CAN TX rejected (w13), UART RX ring drops (w14), CAN TX high-water (w15), power-monitor block tagged "LTC1" (w16-w21: monitors answering, retry delay, retries, bus clears, failed bus clears), send failures (w23) | `BOARD_HEALTH`, Reliable Off, priority 0 | CAN, UART | <= 5 s | Send failure counted in w23 of the next report. |
 | Recovery replies | `BOARD_RECOVERY_REQUEST` addressed to `BOARD_RECOVERY_GB` (2005) | On request | 40 B status | `BOARD_STATE_STATUS`, Reliable Unordered, priority 200 | queued (`board_recovery_transport.c` 67) | request-driven | Router queue limits. |
 | Time sync / discovery | SEDSnet router | Time sync announce/request 2000 ms, source timeout 5000 ms; discovery polled every 50 ms; schema announce retried every 1000 ms until accepted | GB is a consumer with priority 100 (`telemetry.c` 330-337) | built-in | CAN, UART | - | - |
 
@@ -226,7 +226,7 @@ counters.
 
 | Document | Statement | Code |
 | --- | --- | --- |
-| `README.md` (CubeMX section) | Application pool 74 KiB (75,776 B) | `.ioc` `TX_APP_MEM_POOL_SIZE=73728`; generated `app_azure_rtos_config.h` 65408. The three disagree (see bug 2). |
+| `README.md` (CubeMX section) | Application pool 74 KiB (75,776 B) | Fixed in board-bugfix-20261123: README, `.ioc` and `app_azure_rtos_config.h` all say 65,408 (see bug 2). |
 | `README.md` (memory pressure) | Fixed queue preallocation 1 KiB per queue | `SEDSNET_ENV_STARTING_QUEUE_SIZE` 2048 |
 | `README.md` (SEDSnet build) | TLSF fallback pool 8 KiB, 32 blocks of 256 B | `telemetry_tlsf.c`: 16384 B in 128 B blocks (`_Static_assert`), plus 4 x 4096 B large slots |
 | `README.md` | Compact arena 2 KiB / 64 handles | Matches CMake cache; the in-code fallback (`telemetry.c` 41) is 16 handles |
@@ -238,7 +238,13 @@ counters.
 
 ## 8. Known gaps / bugs found
 
-1. **CAN TX time-sync watch can latch permanently.**
+1. **Fixed (board-bugfix-20261123).** Every path that loses the watched
+   packet now returns `watch_state` to 0 (expiry or reset while queued, the
+   bus-off reset of a hardware buffer, a refused or oversize submit, a send
+   refused before the queue via `can_tx_queue_watch_disarm()`, and a
+   completion that never arrives, after `CAN_TX_MAX_AGE_MS`), the same as RF
+   and PB; `tests/test_can_tx_queue.py` covers each path. Original finding:
+   **CAN TX time-sync watch can latch permanently.**
    `can_tx_queue_watch_next()` refuses to arm while `watch_state` is 2 or 3
    (`Core/Src/can_tx_queue.c` 37). State 2 is cleared only when the watched
    packet's last fragment is submitted (127-130); state 3 only in
@@ -251,7 +257,13 @@ counters.
    `telemetry.c` 652 arms the watch before `can_bus_send_large()`; if the
    submit is refused (`HAL_BUSY`) or the packet exceeds `CAN_TX_WATCH_MAX`
    (72 B, line 176), state 1 remains and the next unrelated packet is watched.
-2. **RTOS pool contract test is a no-op, hiding a pool mismatch.**
+2. **Fixed (board-bugfix-20261123).** The regexes now match and the test
+   asserts both macros. The `.ioc` is set to the 65,408 bytes the firmware
+   uses (the October allocator change cut the pool by exactly the 144 extra
+   72-byte CAN RX ring slots, 10,368 bytes), and the README says so. The same
+   regex fix is applied in RFBoard26 and PowerBoard26, whose values already
+   matched. Original finding:
+   **RTOS pool contract test is a no-op, hiding a pool mismatch.**
    `tests/test_cubemx_regeneration.py` 25-31 builds its regexes as
    `rf"^#define\\s+..."`; in a raw string `\\s` matches a literal backslash,
    so `generated` is always `None` and the loop `continue`s without
@@ -259,7 +271,18 @@ counters.
    `TX_APP_MEM_POOL_SIZE=73728` vs `AZURE_RTOS/App/app_azure_rtos_config.h`
    46 `65408` (README claims 75,776). A CubeMX regeneration would change the
    pool by 8 KiB.
-3. **One absent LTC2990 forces an I2C bus clear every second.**
+3. **Fixed (board-bugfix-20261123).** A failing monitor is retried with
+   exponential backoff (1, 2, 4 ... 32 s, then every 32 s; any success returns
+   to the normal period). A device that only NACKs is re-probed alone, so the
+   working device is not reset; the full bus clear runs only for a held bus or
+   a bus-level HAL error. `BOARD_HEALTH` word 16 = "LTC1" tag, word 17 bit 0
+   voltage / bit 1 current monitor answering (clear = absent, not trusted),
+   word 18 current retry delay in ms (0 healthy), words 19-21 retries, bus
+   clears and failed bus clears. `tests/test_power_recovery.py` covers
+   backoff, recovery when the device appears, and the held-bus path. The
+   ~1 s status-poll stall of a present but non-converting device is
+   unchanged. Original finding:
+   **One absent LTC2990 forces an I2C bus clear every second.**
    `data_acq.c` 106-109 runs `power_i2c_recover()` (DeInit, nine SCL pulses,
    re-Init) on every pass while either `ltc2990_*_ready` is 0, also
    disturbing the working device. A blocked status poll can take up to

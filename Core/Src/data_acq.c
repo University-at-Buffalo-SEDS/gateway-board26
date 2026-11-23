@@ -59,27 +59,84 @@ static int power_i2c_recover(void)
     return 0;
 }
 
-static void data_acq_ltc2990_init(void)
+/* Absent or failing LTC2990: retry with exponential backoff so a missing
+ * device does not clear the bus (and disturb the working device) every
+ * report period. The first retry is one period after the failure, then
+ * the delay doubles up to POWER_I2C_RETRY_MAX_MS. Any successful retry
+ * returns to the normal period. */
+#define POWER_I2C_RETRY_MIN_MS 1000U
+#define POWER_I2C_RETRY_MAX_MS 32000U
+#define POWER_LTC2990_VOLTAGE 1U
+#define POWER_LTC2990_CURRENT 2U
+#define POWER_LTC2990_ALL (POWER_LTC2990_VOLTAGE | POWER_LTC2990_CURRENT)
+
+typedef struct {
+    uint32_t next_ms;
+    uint32_t delay_ms;
+    uint8_t failing;
+} power_retry_t;
+
+/* Health (BOARD_HEALTH words 16..21, "LTC1"): devices answering, current
+ * retry delay (0 healthy), retries attempted. */
+volatile uint32_t g_power_ltc2990_present;
+volatile uint32_t g_power_i2c_retry_delay_ms;
+volatile uint32_t g_power_i2c_retries;
+
+static int power_retry_due(const power_retry_t *r, uint32_t now_ms)
 {
-    ltc2990_voltage_ready =
-        (LTC2990_Init(&ltc2990_voltage_handle, &hi2c2, LTC2990_I2C_ADDRESS_VOLTAGE, VOLTAGE) == 0)
-            ? 1U
-            : 0U;
-    if (ltc2990_voltage_ready == 0U) {
+    return !r->failing || (int32_t)(now_ms - r->next_ms) >= 0;
+}
+
+static void power_retry_result(power_retry_t *r, uint32_t now_ms, int healthy)
+{
+    if (healthy) {
+        r->failing = 0U;
+        r->delay_ms = 0U;
+        return;
+    }
+    if (!r->failing || r->delay_ms < POWER_I2C_RETRY_MIN_MS) {
+        r->failing = 1U;
+        r->delay_ms = POWER_I2C_RETRY_MIN_MS;
+    } else {
+        r->delay_ms = (r->delay_ms >= POWER_I2C_RETRY_MAX_MS / 2U)
+            ? POWER_I2C_RETRY_MAX_MS : r->delay_ms * 2U;
+    }
+    r->next_ms = now_ms + r->delay_ms;
+}
+
+static uint32_t data_acq_ready_mask(void)
+{
+    return (ltc2990_voltage_ready ? POWER_LTC2990_VOLTAGE : 0U) |
+           (ltc2990_current_ready ? POWER_LTC2990_CURRENT : 0U);
+}
+
+/* Initializes the devices in `which`; logs a failure only when `log`. */
+static void data_acq_ltc2990_init(uint32_t which, int log)
+{
+    if ((which & POWER_LTC2990_VOLTAGE) != 0U) {
+        ltc2990_voltage_ready =
+            (LTC2990_Init(&ltc2990_voltage_handle, &hi2c2, LTC2990_I2C_ADDRESS_VOLTAGE, VOLTAGE) == 0)
+                ? 1U
+                : 0U;
+        if (ltc2990_voltage_ready == 0U && log) {
 #ifdef TELEMETRY_ENABLED
-        (void)log_error_asynchronous("LTC2990 voltage init failed");
+            (void)log_error_asynchronous("LTC2990 voltage init failed");
 #endif
+        }
     }
 
-    ltc2990_current_ready =
-        (LTC2990_Init(&ltc2990_current_handle, &hi2c2, LTC2990_I2C_ADDRESS_CURRENT, CURRENT) == 0)
-            ? 1U
-            : 0U;
-    if (ltc2990_current_ready == 0U) {
+    if ((which & POWER_LTC2990_CURRENT) != 0U) {
+        ltc2990_current_ready =
+            (LTC2990_Init(&ltc2990_current_handle, &hi2c2, LTC2990_I2C_ADDRESS_CURRENT, CURRENT) == 0)
+                ? 1U
+                : 0U;
+        if (ltc2990_current_ready == 0U && log) {
 #ifdef TELEMETRY_ENABLED
-        (void)log_error_asynchronous("LTC2990 current init failed");
+            (void)log_error_asynchronous("LTC2990 current init failed");
 #endif
+        }
     }
+    g_power_ltc2990_present = data_acq_ready_mask();
 }
 
 static void data_acq_report_power(void)
@@ -93,21 +150,58 @@ static void data_acq_report_power(void)
     }
 }
 
+static int power_i2c_lines_released(void)
+{
+    return HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_8) == GPIO_PIN_SET &&
+           HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_9) == GPIO_PIN_SET;
+}
+
+/* One supervision pass. A held bus or a bus-level HAL error gets the full
+ * bus clear and re-init of both devices. A device that only NACKs (absent)
+ * is probed alone, so the working device is not reset. */
+static void data_acq_supervise(power_retry_t *retry, uint32_t now_ms)
+{
+    const uint32_t error = HAL_I2C_GetError(&hi2c2);
+    const uint32_t missing = POWER_LTC2990_ALL & ~data_acq_ready_mask();
+    if (error == HAL_I2C_ERROR_NONE && missing == 0U) {
+        power_retry_result(retry, now_ms, 1);
+        g_power_i2c_retry_delay_ms = 0U;
+        return;
+    }
+    if (!power_retry_due(retry, now_ms)) return;
+    const int log = !retry->failing;
+    ++g_power_i2c_retries;
+    if (!power_i2c_lines_released() || (error & ~(uint32_t)HAL_I2C_ERROR_AF) != 0U) {
+        if (power_i2c_recover()) data_acq_ltc2990_init(POWER_LTC2990_ALL, log);
+    } else {
+        data_acq_ltc2990_init(missing, log);
+    }
+    power_retry_result(retry, now_ms,
+                       data_acq_ready_mask() == POWER_LTC2990_ALL &&
+                       HAL_I2C_GetError(&hi2c2) == HAL_I2C_ERROR_NONE);
+    g_power_i2c_retry_delay_ms = retry->failing ? retry->delay_ms : 0U;
+}
+
+static uint32_t data_acq_now_ms(void)
+{
+    return (uint32_t)(((uint64_t)tx_time_get() * 1000ULL) / TX_TIMER_TICKS_PER_SECOND);
+}
+
 void data_acq_thread_entry(ULONG initial_input)
 {
     (void)initial_input;
+    power_retry_t retry = {0};
 
-    if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_8) != GPIO_PIN_SET ||
-        HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_9) != GPIO_PIN_SET) {
+    if (!power_i2c_lines_released()) {
         (void)power_i2c_recover();
     }
-    data_acq_ltc2990_init();
+    data_acq_ltc2990_init(POWER_LTC2990_ALL, 1);
+    power_retry_result(&retry, data_acq_now_ms(),
+                       data_acq_ready_mask() == POWER_LTC2990_ALL);
+    g_power_i2c_retry_delay_ms = retry.failing ? retry.delay_ms : 0U;
 
     for (;;) {
-        if (HAL_I2C_GetError(&hi2c2) != HAL_I2C_ERROR_NONE ||
-            !ltc2990_voltage_ready || !ltc2990_current_ready) {
-            if (power_i2c_recover()) data_acq_ltc2990_init();
-        }
+        data_acq_supervise(&retry, data_acq_now_ms());
         data_acq_report_power();
         board_watchdog_progress(BOARD_WATCHDOG_ACQUISITION);
         // HAL_GPIO_TogglePin(GREEN_LED_GPIO_Port, GREEN_LED_Pin);

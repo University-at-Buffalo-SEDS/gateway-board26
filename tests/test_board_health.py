@@ -25,6 +25,7 @@ uint32_t captured[24];
 volatile uint32_t g_watchdog_reset_flags=123,g_watchdog_missing_mask=5;
 volatile uint32_t g_telemetry_tlsf_live_bytes=100,g_telemetry_tlsf_peak_bytes=200,g_telemetry_tlsf_region_bytes=4096,g_telemetry_tlsf_failures=7;
 volatile uint32_t g_can_tx_rejected=11,g_can_tx_high_water=12,g_gateway_uart_rx_ring_drops=13;
+volatile uint32_t g_power_ltc2990_present=1,g_power_i2c_retry_delay_ms=32000,g_power_i2c_retries=41,g_power_i2c_recoveries=42,g_power_i2c_recovery_failures=43;
 volatile uint32_t g_sd_raw_records_enqueued_count=0xf00d1234U,g_sd_raw_records_written_count=15,g_sd_raw_records_dropped_count=16,g_sd_raw_records_flushed_count=17,g_sd_raw_records_io_lost_count=18,g_sd_write_error_count=19,g_sd_max_write_ms=20;
 volatile uint32_t g_sd_enqueued_records=0xf00d1234U,g_sd_written_records=15,g_sd_flushed_records=17,g_sd_format_errors=16,g_sd_lock_contention_drops=18,g_sd_unavailable_drops=19,g_sd_shutdown_lost_records=20,g_sd_write_errors=21;
 void board_temperature_poll(void){}
@@ -62,7 +63,10 @@ int main(void){
 #else
  assert(!(captured[1]&1)&&!captured[7]&&!captured[8]&&!captured[9]&&!captured[10]);
 #endif
- if(captured[1]&16)assert(captured[16]==0xf00d1234U); /* no float rounding */
+ /* Power monitors: tagged "LTC1"; only the voltage device answers. */
+ assert(captured[16]==0x3143544CU&&captured[17]==1&&captured[18]==32000);
+ assert(captured[19]==41&&captured[20]==42&&captured[21]==43);
+ assert(!(captured[1]&(16|32|128))); /* never shadows SD/ADC words */
  uptime=(UINT64_C(1)<<42)+20000;board_health_poll(&router);
  assert(calls==3&&captured[2]==20000&&captured[3]==1024);
  uptime=(UINT64_C(1)<<42)+UINT32_MAX-2U;board_health_poll(&router);assert(calls==4);

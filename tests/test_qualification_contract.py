@@ -33,7 +33,7 @@ class QualificationContractTests(unittest.TestCase):
         ioc = (root / "gateway_board.ioc").read_text(encoding="utf-8")
         self.assertIn("TELEMETRY_THREAD_STACK_SIZE (13U * 1024U)", thread)
         self.assertIn("TX_APP_MEM_POOL_SIZE                     65408", config)
-        self.assertIn("TX_APP_MEM_POOL_SIZE=73728", ioc)
+        self.assertIn("TX_APP_MEM_POOL_SIZE=65408", ioc)
         self.assertIn("UX_DEVICE_APP_MEM_POOL_SIZE=20904", ioc)
 
         layout = json.loads((root / "sim/board.json").read_text())
