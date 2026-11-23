@@ -31,6 +31,6 @@ static inline int can_rx_is_bulk_telemetry(const uint8_t *p, size_t n)
    * non-reliable; the router still performs full decoding and validation. */
   if (n < 7U || (p[0] & 0xd2U)) return 0;
   return p[2] == SEDS_DT_KG1000 || p[2] == SEDS_DT_KG50 ||
-         p[2] == SEDS_DT_FUEL_TANK_PRESSURE;
+         p[2] == SEDS_DT_OX_TANK_PRESSURE;
 }
 #endif

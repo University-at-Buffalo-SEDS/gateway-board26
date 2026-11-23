@@ -48,7 +48,7 @@ class CanStartupBufferTests(unittest.TestCase):
         '''
             with tempfile.TemporaryDirectory() as tmp:
                 p=Path(tmp)
-                (p/'sedsnet_config.h').write_text('#define SEDS_DT_KG1000 118U\n#define SEDS_DT_KG50 119U\n#define SEDS_DT_FUEL_TANK_PRESSURE 111U\n')
+                (p/'sedsnet_config.h').write_text('#define SEDS_DT_KG1000 118U\n#define SEDS_DT_KG50 119U\n#define SEDS_DT_OX_TANK_PRESSURE 111U\n')
                 (p/'can_rx_admission.h').write_text((r/'Core/Inc/can_rx_admission.h').read_text())
                 exe=p/'startup'
                 subprocess.run(['cc','-std=c11','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-I',tmp,'-x','c','-','-o',str(exe)],input=code,text=True,check=True)
